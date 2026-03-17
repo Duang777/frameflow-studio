@@ -23,7 +23,7 @@ const FILTER_OPTIONS = {
   failed: true,
 };
 
-export function TaskQueuePanel({ runs, onClear, onRemove, filterMode = "all", onFilterChange }) {
+export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, filterMode = "all", onFilterChange }) {
   const safeFilterMode = FILTER_OPTIONS[filterMode] ? filterMode : "all";
 
   const filteredRuns = useMemo(() => {
@@ -118,13 +118,24 @@ export function TaskQueuePanel({ runs, onClear, onRemove, filterMode = "all", on
                   </div>
                   <p className="mt-1 text-xs text-atelier-subtle">{run.summary || "Processing..."}</p>
                 </div>
-                <button
-                  type="button"
-                  className="underline-reveal text-[10px] uppercase tracking-[0.2em] text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent"
-                  onClick={() => onRemove(run.id)}
-                >
-                  Remove
-                </button>
+                <div className="flex min-w-[68px] flex-col items-end gap-2">
+                  {run.status === "success" && run.resultPayload && (
+                    <button
+                      type="button"
+                      className="underline-reveal text-[10px] uppercase tracking-[0.2em] text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent"
+                      onClick={() => onOpen?.(run.id)}
+                    >
+                      打开结果
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="underline-reveal text-[10px] uppercase tracking-[0.2em] text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent"
+                    onClick={() => onRemove(run.id)}
+                  >
+                    Remove
+                  </button>
+                </div>
               </li>
             );
           })}

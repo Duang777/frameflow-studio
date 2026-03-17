@@ -63,6 +63,7 @@ export default function StudioPage() {
   const [batchResults, setBatchResults] = useState([]);
   const [batchImageRunning, setBatchImageRunning] = useState(false);
   const [filterMode, setFilterMode] = useState("all");
+  const [activeHistoryId, setActiveHistoryId] = useState(null);
   const [queueFilterMode, setQueueFilterMode] = useState(() =>
     normalizeQueueFilter(searchParams.get(QUEUE_FILTER_QUERY_KEY))
   );
@@ -321,6 +322,75 @@ export default function StudioPage() {
 
   const removeTaskRun = (id) => setTaskRuns((prev) => prev.filter((item) => item.id !== id));
   const clearTaskRuns = () => setTaskRuns([]);
+  const openTaskResult = (id) => {
+    const run = taskRuns.find((item) => item.id === id);
+    if (!run) {
+      updateStatus("error", "任务不存在", "找不到对应任务记录。");
+      return;
+    }
+
+    const payload = run.resultPayload;
+    if (!payload) {
+      updateStatus("error", "无可打开结果", "该任务没有可恢复的结果。");
+      return;
+    }
+
+    if (payload.kind === "ideas") {
+      if (payload.historyId) {
+        const hit = history.find((item) => item.id === payload.historyId);
+        if (hit) {
+          restoreHistory(hit.id);
+          return;
+        }
+      }
+
+      const nextIdeas = Array.isArray(payload.ideas) ? payload.ideas : [];
+      if (nextIdeas.length === 0) {
+        updateStatus("error", "无可打开结果", "该任务未保存可恢复分镜。");
+        return;
+      }
+
+      setIdeas(nextIdeas);
+      setSelectedIdeaIndexes([]);
+      setLastSelectedIndex(null);
+      setFilterMode("all");
+      setActiveHistoryId(payload.historyId || null);
+      updateSettings({
+        seedText: String(payload.seedText || settings.seedText || ""),
+        modeId: String(payload.modeId || settings.modeId),
+        styleBias: String(payload.styleBias || settings.styleBias),
+      });
+      updateStatus("success", "任务结果已打开", "已恢复该任务的分镜结果。");
+      return;
+    }
+
+    if (payload.kind === "batch") {
+      const results = Array.isArray(payload.results) ? payload.results : [];
+      if (results.length === 0) {
+        updateStatus("error", "无可打开结果", "该批量任务未保存可恢复结果。");
+        return;
+      }
+      setBatchResults(results);
+      updateStatus("success", "任务结果已打开", `已恢复批量结果，共 ${results.length} 条。`);
+      return;
+    }
+
+    if (payload.kind === "image") {
+      if (payload.historyId) {
+        const hit = history.find((item) => item.id === payload.historyId);
+        if (hit) {
+          restoreHistory(hit.id);
+          updateStatus("success", "任务结果已打开", `已恢复分镜图任务：${payload.title || "分镜图"}`);
+          return;
+        }
+      }
+
+      updateStatus("error", "无可打开结果", "该分镜图已不在当前画布，建议从“最近记录”恢复。");
+      return;
+    }
+
+    updateStatus("error", "无可打开结果", "当前任务类型暂不支持打开。");
+  };
 
   const handleImageChange = async (event) => {
     const file = event.target.files?.[0];
@@ -420,12 +490,20 @@ export default function StudioPage() {
       setIdeas(nextIdeas);
       setSelectedIdeaIndexes([]);
       setLastSelectedIndex(null);
-      pushHistoryRecord(nextIdeas);
+      const historyId = pushHistoryRecord(nextIdeas);
       finishTaskRun(taskId, {
         status: "success",
         progress: 100,
         stageText: String(finalTask.stageText || "完成"),
         summary: `生成完成，共 ${nextIdeas.length} 条。`,
+        resultPayload: {
+          kind: "ideas",
+          ideas: nextIdeas,
+          historyId,
+          modeId: settings.modeId,
+          styleBias: settings.styleBias,
+          seedText: settings.seedText,
+        },
       });
       updateStatus("success", "生成完成", `已生成 ${nextIdeas.length} 条分镜（${activeMode.name} / ${activeStyleLabel}）。`);
     } catch (error) {
@@ -463,6 +541,25 @@ export default function StudioPage() {
     }
   };
 
+  const syncActiveHistoryIdeas = (nextIdeas) => {
+    if (!activeHistoryId) {
+      return;
+    }
+
+    setHistory((prev) =>
+      prev.map((item) =>
+        item.id === activeHistoryId
+          ? {
+              ...item,
+              ideas: nextIdeas,
+              count: Array.isArray(nextIdeas) ? nextIdeas.length : item.count,
+              updatedAt: Date.now(),
+            }
+          : item
+      )
+    );
+  };
+
   const pushHistoryRecord = (nextIdeas) => {
     const item = {
       id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
@@ -478,6 +575,8 @@ export default function StudioPage() {
     };
 
     setHistory((prev) => [item, ...prev].slice(0, 30));
+    setActiveHistoryId(item.id);
+    return item.id;
   };
 
   const copyAll = async () => {
@@ -505,8 +604,9 @@ export default function StudioPage() {
   };
 
   const patchIdeaImageState = (index, patch) => {
-    setIdeas((prev) =>
-      prev.map((idea, idx) => {
+    let nextIdeas = [];
+    setIdeas((prev) => {
+      nextIdeas = prev.map((idea, idx) => {
         if (idx !== index) return idea;
         const prevImage = idea?.generatedImage || { status: "idle", url: "", error: "", model: "" };
         return {
@@ -516,8 +616,14 @@ export default function StudioPage() {
             ...patch,
           },
         };
-      })
-    );
+      });
+      return nextIdeas;
+    });
+
+    if (nextIdeas.length > 0) {
+      syncActiveHistoryIdeas(nextIdeas);
+    }
+    return nextIdeas;
   };
 
   const generateIdeaImage = async (index) => {
@@ -617,6 +723,13 @@ export default function StudioPage() {
         progress: 100,
         stageText: String(finalTask.stageText || "完成"),
         summary: `第 ${index + 1} 条分镜图已生成。`,
+        resultPayload: {
+          kind: "image",
+          historyId: activeHistoryId,
+          ideaIndex: index,
+          ideaKey: makeFavoriteKey(ideaPayload),
+          title: ideaPayload.title || `#${index + 1}`,
+        },
       });
       updateStatus("success", "出图完成", `第 ${index + 1} 条分镜图已生成。`);
       return true;
@@ -767,12 +880,27 @@ export default function StudioPage() {
         throw new Error("再生成未返回有效结果，请重试。");
       }
 
-      setIdeas((prev) => prev.map((item, idx) => (idx === index ? replacement : item)));
+      let nextIdeas = [];
+      setIdeas((prev) => {
+        nextIdeas = prev.map((item, idx) => (idx === index ? replacement : item));
+        return nextIdeas;
+      });
+      if (nextIdeas.length > 0) {
+        syncActiveHistoryIdeas(nextIdeas);
+      }
       finishTaskRun(taskId, {
         status: "success",
         progress: 100,
         stageText: String(finalTask.stageText || "完成"),
         summary: `第 ${index + 1} 条已更新。`,
+        resultPayload: {
+          kind: "ideas",
+          ideas: nextIdeas,
+          historyId: activeHistoryId,
+          modeId: settings.modeId,
+          styleBias: settings.styleBias,
+          seedText: settings.seedText,
+        },
       });
       updateStatus("success", "再生成完成", `第 ${index + 1} 条分镜已更新。`);
     } catch (error) {
@@ -855,10 +983,14 @@ export default function StudioPage() {
     setIdeas([]);
     setSelectedIdeaIndexes([]);
     setLastSelectedIndex(null);
+    setActiveHistoryId(null);
     updateStatus("idle", "已清空", "结果区已清空。");
   };
 
-  const clearHistory = () => setHistory([]);
+  const clearHistory = () => {
+    setHistory([]);
+    setActiveHistoryId(null);
+  };
 
   const restoreHistory = (id) => {
     const item = history.find((entry) => entry.id === id);
@@ -869,6 +1001,7 @@ export default function StudioPage() {
     setIdeas(item.ideas || []);
     setSelectedIdeaIndexes([]);
     setLastSelectedIndex(null);
+    setActiveHistoryId(item.id);
     updateSettings({
       seedText: item.seedText || "",
       modeId: item.modeId || settings.modeId,
@@ -878,7 +1011,12 @@ export default function StudioPage() {
     updateStatus("success", "历史已恢复", `已恢复 ${formatTime(item.createdAt)} 的结果。`);
   };
 
-  const removeHistory = (id) => setHistory((prev) => prev.filter((item) => item.id !== id));
+  const removeHistory = (id) => {
+    setHistory((prev) => prev.filter((item) => item.id !== id));
+    if (activeHistoryId === id) {
+      setActiveHistoryId(null);
+    }
+  };
 
   const toggleSelectIdea = (index, shouldRangeSelect = false) => {
     if (shouldRangeSelect && typeof lastSelectedIndex === "number") {
@@ -999,6 +1137,7 @@ export default function StudioPage() {
     setIdeas(expansions);
     setSelectedIdeaIndexes([]);
     setLastSelectedIndex(null);
+    setActiveHistoryId(null);
     setFilterMode("all");
     updateSettings({
       seedText: String(result.seed || ""),
@@ -1144,6 +1283,11 @@ export default function StudioPage() {
         progress: 100,
         stageText: String(finalTask.stageText || "完成"),
         summary: `批量完成，共 ${seeds.length} 条，成功 ${successCount} 条。`,
+        resultPayload: {
+          kind: "batch",
+          results,
+          seedsCount: seeds.length,
+        },
       });
       updateStatus("success", "批量完成", `共 ${seeds.length} 条，成功 ${successCount} 条。`);
     } catch (error) {
@@ -1457,6 +1601,7 @@ export default function StudioPage() {
             runs={taskRuns}
             onClear={clearTaskRuns}
             onRemove={removeTaskRun}
+            onOpen={openTaskResult}
             filterMode={queueFilterMode}
             onFilterChange={setQueueFilterMode}
           />
