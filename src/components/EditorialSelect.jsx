@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 export function EditorialSelect({ value, onChange, options, placeholder = "è¯·é€‰æ‹©" }) {
   const rootRef = useRef(null);
   const [open, setOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   const normalizedOptions = useMemo(
     () =>
@@ -14,6 +15,16 @@ export function EditorialSelect({ value, onChange, options, placeholder = "è¯·é€
   );
 
   const selected = normalizedOptions.find((item) => item.value === String(value));
+  const selectedIndex = normalizedOptions.findIndex((item) => item.value === String(value));
+
+  useEffect(() => {
+    if (!open) {
+      setHighlightedIndex(-1);
+      return;
+    }
+
+    setHighlightedIndex(selectedIndex >= 0 ? selectedIndex : 0);
+  }, [open, selectedIndex]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -45,20 +56,65 @@ export function EditorialSelect({ value, onChange, options, placeholder = "è¯·é€
     }
   };
 
+  const onKeyDown = (event) => {
+    const key = event.key;
+    if (!open && (key === "ArrowDown" || key === "ArrowUp" || key === "Enter" || key === " ")) {
+      event.preventDefault();
+      setOpen(true);
+      return;
+    }
+
+    if (!open) {
+      return;
+    }
+
+    if (key === "Escape") {
+      event.preventDefault();
+      setOpen(false);
+      return;
+    }
+
+    if (key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightedIndex((prev) => Math.min(normalizedOptions.length - 1, prev + 1));
+      return;
+    }
+
+    if (key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedIndex((prev) => Math.max(0, prev - 1));
+      return;
+    }
+
+    if (key === "Home") {
+      event.preventDefault();
+      setHighlightedIndex(0);
+      return;
+    }
+
+    if (key === "End") {
+      event.preventDefault();
+      setHighlightedIndex(Math.max(0, normalizedOptions.length - 1));
+      return;
+    }
+
+    if (key === "Enter" || key === " ") {
+      event.preventDefault();
+      const target = normalizedOptions[Math.max(0, highlightedIndex)];
+      if (target) {
+        commitValue(target.value);
+      }
+    }
+  };
+
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="relative" onKeyDown={onKeyDown}>
       <button
         type="button"
         className={`group flex w-full items-center justify-between border-b bg-transparent py-2 text-sm outline-none transition-colors duration-500 ${
           open ? "border-atelier-accent" : "border-atelier-fg/20 hover:border-atelier-fg/40"
         }`}
         onClick={() => setOpen((prev) => !prev)}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-            event.preventDefault();
-            setOpen(true);
-          }
-        }}
         aria-haspopup="listbox"
         aria-expanded={open}
       >
@@ -73,6 +129,7 @@ export function EditorialSelect({ value, onChange, options, placeholder = "è¯·é€
           <ul role="listbox" className="max-h-56 overflow-auto">
             {normalizedOptions.map((item) => {
               const active = item.value === String(value);
+              const highlighted = normalizedOptions[highlightedIndex]?.value === item.value;
               return (
                 <li key={item.value} role="option" aria-selected={active}>
                   <button
@@ -81,6 +138,8 @@ export function EditorialSelect({ value, onChange, options, placeholder = "è¯·é€
                     className={`w-full border-t px-3 py-2 text-left text-sm leading-relaxed transition-colors duration-500 first:border-t-0 ${
                       active
                         ? "border-atelier-fg/20 bg-atelier-muted/55 text-atelier-fg"
+                        : highlighted
+                        ? "border-atelier-fg/10 bg-white/75 text-atelier-accent"
                         : "border-atelier-fg/10 text-atelier-fg hover:bg-white/75 hover:text-atelier-accent"
                     }`}
                   >
