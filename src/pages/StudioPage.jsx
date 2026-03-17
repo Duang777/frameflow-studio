@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { BatchWorkflow } from "../components/BatchWorkflow";
+import { EditorialSelect } from "../components/EditorialSelect";
 import { HistoryPanel } from "../components/HistoryPanel";
 import { IdeaCard } from "../components/IdeaCard";
 import { ModeLibrary } from "../components/ModeLibrary";
@@ -70,6 +71,25 @@ export default function StudioPage() {
         .map((line) => line.trim())
         .filter(Boolean).length,
     [batchText]
+  );
+
+  const modeOptions = useMemo(
+    () => STORYBOARD_MODES.map((mode) => ({ value: mode.id, label: mode.name })),
+    []
+  );
+
+  const styleOptions = useMemo(
+    () => STYLE_BIASES.map((item) => ({ value: item.id, label: item.label })),
+    []
+  );
+
+  const countOptions = useMemo(
+    () => [
+      { value: "6", label: "6 条" },
+      { value: "8", label: "8 条" },
+      { value: "10", label: "10 条" },
+    ],
+    []
   );
 
   const ideaEntries = useMemo(
@@ -917,43 +937,27 @@ export default function StudioPage() {
 
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 <FieldLabel label="模式">
-                  <select
+                  <EditorialSelect
                     value={settings.modeId}
-                    onChange={(event) => updateSettings({ modeId: event.target.value })}
-                    className="w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm outline-none transition-colors duration-500 focus:border-atelier-accent"
-                  >
-                    {STORYBOARD_MODES.map((mode) => (
-                      <option key={mode.id} value={mode.id}>
-                        {mode.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(nextValue) => updateSettings({ modeId: nextValue })}
+                    options={modeOptions}
+                  />
                 </FieldLabel>
 
                 <FieldLabel label="风格">
-                  <select
+                  <EditorialSelect
                     value={settings.styleBias}
-                    onChange={(event) => updateSettings({ styleBias: event.target.value })}
-                    className="w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm outline-none transition-colors duration-500 focus:border-atelier-accent"
-                  >
-                    {STYLE_BIASES.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(nextValue) => updateSettings({ styleBias: nextValue })}
+                    options={styleOptions}
+                  />
                 </FieldLabel>
 
                 <FieldLabel label="生成条数">
-                  <select
-                    value={settings.ideaCount}
-                    onChange={(event) => updateSettings({ ideaCount: Number(event.target.value) })}
-                    className="w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm outline-none transition-colors duration-500 focus:border-atelier-accent"
-                  >
-                    <option value={6}>6 条</option>
-                    <option value={8}>8 条</option>
-                    <option value={10}>10 条</option>
-                  </select>
+                  <EditorialSelect
+                    value={String(settings.ideaCount)}
+                    onChange={(nextValue) => updateSettings({ ideaCount: Number(nextValue) })}
+                    options={countOptions}
+                  />
                 </FieldLabel>
 
                 <FieldLabel label="模型">
@@ -990,7 +994,12 @@ export default function StudioPage() {
               </div>
 
               <details className="mt-4 border-t border-atelier-fg/10 pt-3" open>
-                <summary className="cursor-pointer text-[10px] uppercase tracking-editorial text-atelier-subtle">高级 Prompt 模板</summary>
+                <summary className="details-summary group flex cursor-pointer list-none items-center justify-between text-[10px] uppercase tracking-editorial text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent">
+                  <span>高级 Prompt 模板</span>
+                  <span className="details-chevron transition-transform duration-500 group-hover:text-atelier-accent" aria-hidden="true">
+                    <SummaryChevron />
+                  </span>
+                </summary>
                 <textarea
                   value={settings.promptTemplate}
                   onChange={(event) => updateSettings({ promptTemplate: event.target.value })}
@@ -1228,4 +1237,12 @@ function formatTaskStageSummary(task) {
     return `${stageText} · ${safeProgress}%`;
   }
   return `任务进度 ${safeProgress}%`;
+}
+
+function SummaryChevron() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none">
+      <path d="M3 6l5 5 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
+    </svg>
+  );
 }

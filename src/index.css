@@ -158,6 +158,15 @@ body {
   opacity: 0.0045;
 }
 
+.details-summary::-webkit-details-marker {
+  display: none;
+}
+
+details[open] .details-chevron {
+  transform: rotate(180deg);
+  color: #d4af37;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
