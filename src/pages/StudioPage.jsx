@@ -10,7 +10,7 @@ import { TaskQueuePanel } from "../components/TaskQueuePanel";
 import { buildIdeaCopyText, downloadText, formatTime, toIdeaMarkdown } from "../lib/formatters";
 import { DEFAULT_PROMPT_TEMPLATE, getModeById, STORYBOARD_MODES, STYLE_BIASES } from "../lib/modes";
 import { useLocalStorageState } from "../lib/storage";
-import { batchExpandStoryboard, expandStoryboard } from "../services/studioApi";
+import { cancelTaskById, createBatchExpandTask, createExpandTask, getTaskStatus } from "../services/studioApi";
 
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const PLACEHOLDER_IMAGE =
@@ -34,6 +34,7 @@ const FILTER_MODES = [
 ];
 
 const MAX_TASK_RUNS = 20;
+const FINAL_TASK_STATUSES = ["success", "error", "cancelled"];
 
 export default function StudioPage() {
   const [settings, setSettings] = useLocalStorageState("atelier_settings_react", defaultSettings);
@@ -222,6 +223,32 @@ export default function StudioPage() {
     );
   };
 
+  const patchTaskRun = (id, patch) => {
+    setTaskRuns((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  };
+
+  const waitForTaskCompletion = async (taskId, onTick) => {
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      const data = await getTaskStatus(taskId);
+      const task = data?.task;
+      if (!task) {
+        throw new Error("任务状态读取失败。");
+      }
+
+      if (typeof onTick === "function") {
+        onTick(task);
+      }
+
+      if (FINAL_TASK_STATUSES.includes(task.status)) {
+        return task;
+      }
+
+      await delay(900);
+    }
+
+    throw new Error("任务轮询超时，请重试。");
+  };
+
   const removeTaskRun = (id) => setTaskRuns((prev) => prev.filter((item) => item.id !== id));
   const clearTaskRuns = () => setTaskRuns([]);
 
@@ -269,27 +296,51 @@ export default function StudioPage() {
 
     setLoading(true);
     updateStatus("loading", "生成中", "正在调用后端代理生成分镜，请稍候...");
-
-    const controller = new AbortController();
-    pendingRef.current = controller;
+    let backendTaskId = "";
 
     try {
-      const payload = await expandStoryboard(
-        {
-          seedText: settings.seedText.trim(),
-          imageDataUrl: imageState.dataUrl,
-          styleBias: settings.styleBias,
-          modeId: settings.modeId,
-          ideaCount: Number(settings.ideaCount),
-          temperature: Number(settings.temperature),
-          topP: Number(settings.topP),
-          promptTemplate: settings.promptTemplate,
-          model: settings.model,
-        },
-        controller.signal
-      );
+      const createResult = await createExpandTask({
+        seedText: settings.seedText.trim(),
+        imageDataUrl: imageState.dataUrl,
+        styleBias: settings.styleBias,
+        modeId: settings.modeId,
+        ideaCount: Number(settings.ideaCount),
+        temperature: Number(settings.temperature),
+        topP: Number(settings.topP),
+        promptTemplate: settings.promptTemplate,
+        model: settings.model,
+      });
 
-      const nextIdeas = payload.expansions || [];
+      backendTaskId = createResult?.task?.id || "";
+      if (!backendTaskId) {
+        throw new Error("任务创建失败，请重试。");
+      }
+
+      pendingRef.current = { taskId: backendTaskId, kind: "expand" };
+
+      const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
+        if (task.status === "running" || task.status === "pending") {
+          patchTaskRun(taskId, {
+            summary: `任务进度 ${task.progress}%`,
+          });
+          updateStatus("loading", "生成中", `任务进度 ${task.progress}%...`);
+        }
+      });
+
+      if (finalTask.status === "cancelled") {
+        finishTaskRun(taskId, {
+          status: "cancelled",
+          summary: "请求已取消。",
+        });
+        updateStatus("idle", "已取消", "请求已取消。可以继续修改参数后重试。");
+        return;
+      }
+
+      if (finalTask.status !== "success") {
+        throw new Error(finalTask.error || "生成失败，请稍后重试。");
+      }
+
+      const nextIdeas = finalTask?.result?.expansions || [];
       setIdeas(nextIdeas);
       setSelectedIdeaIndexes([]);
       setLastSelectedIndex(null);
@@ -300,22 +351,35 @@ export default function StudioPage() {
       });
       updateStatus("success", "生成完成", `已生成 ${nextIdeas.length} 条分镜（${activeMode.name} / ${activeStyleLabel}）。`);
     } catch (error) {
-      const isCancelled = error?.name === "AbortError";
       finishTaskRun(taskId, {
-        status: isCancelled ? "cancelled" : "error",
-        summary: isCancelled ? "请求已取消。" : error.message || "生成失败，请稍后重试。",
+        status: "error",
+        summary: error.message || "生成失败，请稍后重试。",
       });
       updateStatus("error", "生成失败", error.message || "生成失败，请稍后重试。");
     } finally {
-      pendingRef.current = null;
+      if (pendingRef.current?.taskId === backendTaskId) {
+        pendingRef.current = null;
+      }
       setLoading(false);
     }
   };
 
-  const handleCancel = () => {
-    if (pendingRef.current) {
-      pendingRef.current.abort();
-      updateStatus("idle", "已取消", "请求已取消。可以继续修改参数后重试。");
+  const handleCancel = async () => {
+    const current = pendingRef.current;
+    if (!current?.taskId) {
+      return;
+    }
+
+    try {
+      await cancelTaskById(current.taskId);
+    } catch {
+      // Keep UI responsive even if cancel endpoint is temporarily unavailable.
+    }
+
+    updateStatus("idle", "已取消", "已发送取消请求，正在结束任务...");
+    if (current.kind === "batch") {
+      setBatchRunning(false);
+    } else {
       setLoading(false);
     }
   };
@@ -381,26 +445,51 @@ export default function StudioPage() {
     updateStatus("loading", "再生成中", `正在重写第 ${index + 1} 条分镜...`);
 
     const remixSeed = `${settings.seedText}\n\n请围绕下列分镜生成一个“同主题但不同表达”的替代版本：${JSON.stringify(source)}`;
-    const controller = new AbortController();
-    pendingRef.current = controller;
+    let backendTaskId = "";
 
     try {
-      const payload = await expandStoryboard(
-        {
-          seedText: remixSeed,
-          imageDataUrl: imageState.dataUrl,
-          styleBias: settings.styleBias,
-          modeId: settings.modeId,
-          ideaCount: 1,
-          temperature: Number(settings.temperature),
-          topP: Number(settings.topP),
-          promptTemplate: settings.promptTemplate,
-          model: settings.model,
-        },
-        controller.signal
-      );
+      const createResult = await createExpandTask({
+        seedText: remixSeed,
+        imageDataUrl: imageState.dataUrl,
+        styleBias: settings.styleBias,
+        modeId: settings.modeId,
+        ideaCount: 1,
+        temperature: Number(settings.temperature),
+        topP: Number(settings.topP),
+        promptTemplate: settings.promptTemplate,
+        model: settings.model,
+      });
 
-      const replacement = payload.expansions?.[0];
+      backendTaskId = createResult?.task?.id || "";
+      if (!backendTaskId) {
+        throw new Error("任务创建失败，请重试。");
+      }
+
+      pendingRef.current = { taskId: backendTaskId, kind: "remix" };
+
+      const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
+        if (task.status === "running" || task.status === "pending") {
+          patchTaskRun(taskId, {
+            summary: `任务进度 ${task.progress}%`,
+          });
+          updateStatus("loading", "再生成中", `任务进度 ${task.progress}%...`);
+        }
+      });
+
+      if (finalTask.status === "cancelled") {
+        finishTaskRun(taskId, {
+          status: "cancelled",
+          summary: "请求已取消。",
+        });
+        updateStatus("idle", "已取消", "请求已取消。可以继续修改参数后重试。");
+        return;
+      }
+
+      if (finalTask.status !== "success") {
+        throw new Error(finalTask.error || "请求失败。");
+      }
+
+      const replacement = finalTask?.result?.expansions?.[0];
       if (!replacement) {
         throw new Error("再生成未返回有效结果，请重试。");
       }
@@ -412,14 +501,15 @@ export default function StudioPage() {
       });
       updateStatus("success", "再生成完成", `第 ${index + 1} 条分镜已更新。`);
     } catch (error) {
-      const isCancelled = error?.name === "AbortError";
       finishTaskRun(taskId, {
-        status: isCancelled ? "cancelled" : "error",
-        summary: isCancelled ? "请求已取消。" : error.message || "请求失败。",
+        status: "error",
+        summary: error.message || "请求失败。",
       });
       updateStatus("error", "再生成失败", error.message || "请求失败。");
     } finally {
-      pendingRef.current = null;
+      if (pendingRef.current?.taskId === backendTaskId) {
+        pendingRef.current = null;
+      }
       setLoading(false);
     }
   };
@@ -638,9 +728,10 @@ export default function StudioPage() {
 
     setBatchRunning(true);
     updateStatus("loading", "批量处理中", `正在处理 ${seeds.length} 条任务，请稍候...`);
+    let backendTaskId = "";
 
     try {
-      const data = await batchExpandStoryboard({
+      const createResult = await createBatchExpandTask({
         seeds,
         modeId: settings.modeId,
         styleBias: settings.styleBias,
@@ -651,7 +742,36 @@ export default function StudioPage() {
         model: settings.model,
       });
 
-      const results = data?.results || [];
+      backendTaskId = createResult?.task?.id || "";
+      if (!backendTaskId) {
+        throw new Error("任务创建失败，请重试。");
+      }
+
+      pendingRef.current = { taskId: backendTaskId, kind: "batch" };
+
+      const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
+        if (task.status === "running" || task.status === "pending") {
+          patchTaskRun(taskId, {
+            summary: `任务进度 ${task.progress}%`,
+          });
+          updateStatus("loading", "批量处理中", `任务进度 ${task.progress}%...`);
+        }
+      });
+
+      if (finalTask.status === "cancelled") {
+        finishTaskRun(taskId, {
+          status: "cancelled",
+          summary: "请求已取消。",
+        });
+        updateStatus("idle", "已取消", "请求已取消。可以继续修改参数后重试。");
+        return;
+      }
+
+      if (finalTask.status !== "success") {
+        throw new Error(finalTask.error || "批量处理失败。");
+      }
+
+      const results = finalTask?.result?.results || [];
       setBatchResults(results);
       const successCount = results.filter((item) => !item.error).length;
 
@@ -686,6 +806,9 @@ export default function StudioPage() {
       });
       updateStatus("error", "批量失败", error.message || "批量处理失败。");
     } finally {
+      if (pendingRef.current?.taskId === backendTaskId) {
+        pendingRef.current = null;
+      }
       setBatchRunning(false);
     }
   };
@@ -849,11 +972,11 @@ export default function StudioPage() {
                 </PrimaryButton>
                 <button
                   type="button"
-                  disabled={!loading}
+                  disabled={!loading && !batchRunning}
                   onClick={handleCancel}
                   className="min-h-12 border border-atelier-fg px-8 text-xs uppercase tracking-button transition-colors duration-500 hover:bg-atelier-fg hover:text-atelier-inverse disabled:opacity-50"
                 >
-                  取消请求
+                  取消任务
                 </button>
               </div>
               <p className="mt-3 text-xs text-atelier-subtle">快捷键：Ctrl/Cmd + Enter 直接生成</p>
@@ -1053,4 +1176,10 @@ function isEditableTarget(target) {
   const tag = target.tagName.toLowerCase();
   if (target.getAttribute("contenteditable") === "true") return true;
   return tag === "input" || tag === "textarea" || tag === "select";
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

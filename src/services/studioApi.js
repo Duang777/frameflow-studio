@@ -15,3 +15,19 @@ export function expandStoryboard(payload, signal) {
 export function batchExpandStoryboard(payload) {
   return post("/api/batch-expand", payload);
 }
+
+export function createExpandTask(payload) {
+  return post("/api/tasks/expand", payload);
+}
+
+export function createBatchExpandTask(payload) {
+  return post("/api/tasks/batch-expand", payload);
+}
+
+export function getTaskStatus(taskId) {
+  return get(`/api/tasks/${encodeURIComponent(taskId)}`);
+}
+
+export function cancelTaskById(taskId) {
+  return post(`/api/tasks/${encodeURIComponent(taskId)}/cancel`, {});
+}

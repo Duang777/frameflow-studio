@@ -2,6 +2,7 @@
 import dotenv from "dotenv";
 import express from "express";
 import { failure, success } from "./response.js";
+import { cancelTask, createTask, getTask } from "./taskManager.js";
 import { ensureIdeaCount, normalizeIdeas, parseJsonText } from "./utils.js";
 import { getModeById, STORYBOARD_MODES, STYLE_HINTS } from "./modes.js";
 
@@ -24,9 +25,101 @@ app.get("/api/modes", (_req, res) => {
   res.json(success({ modes: STORYBOARD_MODES }, "modes fetched"));
 });
 
+app.post("/api/tasks/expand", async (req, res) => {
+  if (!ensureApiKey(res)) {
+    return;
+  }
+
+  const input = req.body || {};
+  if (!String(input?.seedText || "").trim() && !String(input?.imageDataUrl || "").trim()) {
+    res.status(400).json(failure("请至少提供文本或图片输入。", 400));
+    return;
+  }
+
+  const task = createTask({
+    type: "expand",
+    payload: sanitizeTaskPayload(input),
+    run: async (ctx) => {
+      ctx.setProgress(15);
+      const result = await generateOne(input);
+      if (ctx.isCancelled()) return {};
+      ctx.setProgress(95);
+      return result;
+    },
+  });
+
+  res.status(202).json(success({ task }, "task created"));
+});
+
+app.post("/api/tasks/batch-expand", async (req, res) => {
+  if (!ensureApiKey(res)) {
+    return;
+  }
+
+  const seeds = normalizeBatchSeeds(req.body?.seeds);
+  if (seeds.length === 0) {
+    res.status(400).json(failure("请提供至少一个有效 seed。", 400));
+    return;
+  }
+
+  const input = req.body || {};
+  const task = createTask({
+    type: "batch",
+    payload: {
+      ...sanitizeTaskPayload(input),
+      seedsCount: seeds.length,
+    },
+    run: async (ctx) => {
+      const shared = {
+        ...input,
+        imageDataUrl: "",
+      };
+      const results = [];
+
+      for (let index = 0; index < seeds.length; index += 1) {
+        if (ctx.isCancelled()) {
+          break;
+        }
+
+        const seed = seeds[index];
+        try {
+          const output = await generateOne({ ...shared, seedText: seed });
+          results.push({ seed, expansions: output.expansions });
+        } catch (error) {
+          results.push({ seed, error: error.message || "生成失败" });
+        }
+
+        const progress = Math.round(((index + 1) / seeds.length) * 100);
+        ctx.setProgress(progress);
+      }
+
+      return { results };
+    },
+  });
+
+  res.status(202).json(success({ task }, "task created"));
+});
+
+app.get("/api/tasks/:taskId", (req, res) => {
+  const task = getTask(String(req.params.taskId || "").trim());
+  if (!task) {
+    res.status(404).json(failure("任务不存在。", 404));
+    return;
+  }
+  res.json(success({ task }, "task fetched"));
+});
+
+app.post("/api/tasks/:taskId/cancel", (req, res) => {
+  const task = cancelTask(String(req.params.taskId || "").trim());
+  if (!task) {
+    res.status(404).json(failure("任务不存在。", 404));
+    return;
+  }
+  res.json(success({ task }, "task cancelled"));
+});
+
 app.post("/api/expand", async (req, res) => {
-  if (!GEMINI_API_KEY) {
-    res.status(500).json(failure("服务端未配置 GEMINI_API_KEY。请在 .env 中设置后重启。", 500));
+  if (!ensureApiKey(res)) {
     return;
   }
 
@@ -40,14 +133,11 @@ app.post("/api/expand", async (req, res) => {
 });
 
 app.post("/api/batch-expand", async (req, res) => {
-  if (!GEMINI_API_KEY) {
-    res.status(500).json(failure("服务端未配置 GEMINI_API_KEY。请在 .env 中设置后重启。", 500));
+  if (!ensureApiKey(res)) {
     return;
   }
 
-  const seeds = Array.isArray(req.body?.seeds)
-    ? req.body.seeds.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 20)
-    : [];
+  const seeds = normalizeBatchSeeds(req.body?.seeds);
 
   if (seeds.length === 0) {
     res.status(400).json(failure("请提供至少一个有效 seed。", 400));
@@ -81,6 +171,30 @@ app.use((error, _req, res, _next) => {
 app.listen(PORT, () => {
   console.log(`[server] storyboard proxy listening on http://localhost:${PORT}`);
 });
+
+function ensureApiKey(res) {
+  if (GEMINI_API_KEY) {
+    return true;
+  }
+  res.status(500).json(failure("服务端未配置 GEMINI_API_KEY。请在 .env 中设置后重启。", 500));
+  return false;
+}
+
+function normalizeBatchSeeds(input) {
+  return Array.isArray(input)
+    ? input.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 20)
+    : [];
+}
+
+function sanitizeTaskPayload(input) {
+  const body = input && typeof input === "object" ? input : {};
+  return {
+    modeId: body.modeId,
+    styleBias: body.styleBias,
+    ideaCount: body.ideaCount,
+    model: body.model,
+  };
+}
 
 async function generateOne(input) {
   const seedText = String(input?.seedText || "").trim();

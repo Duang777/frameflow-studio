@@ -29,6 +29,7 @@
   - `index.js`：接口入口
   - `modes.js`：模式库与风格映射
   - `response.js`：统一响应结构工具
+  - `taskManager.js`：内存任务管理（创建/查询/取消）
   - `utils.js`：模型输出解析与补全
 
 ## 本地启动
@@ -69,6 +70,10 @@ npm run build
 
 - `GET /api/health`：健康检查
 - `GET /api/modes`：模式库列表
+- `POST /api/tasks/expand`：创建单条拓展任务（异步）
+- `POST /api/tasks/batch-expand`：创建批量拓展任务（异步）
+- `GET /api/tasks/:taskId`：查询任务状态与结果
+- `POST /api/tasks/:taskId/cancel`：取消任务
 - `POST /api/expand`：单条生成
 - `POST /api/batch-expand`：批量生成
 
@@ -84,8 +89,16 @@ npm run build
 }
 ```
 
-- 成功：`HTTP 200`，`code = 0`
+- 成功：`HTTP 200 / 202`，`code = 0`
 - 失败：`HTTP >= 400`，`code = HTTP 状态码`，错误信息在 `message`
+
+### 任务状态字段
+
+- `pending`：已创建，等待执行
+- `running`：执行中
+- `success`：执行成功，可从 `data.task.result` 读取结果
+- `error`：执行失败，可从 `data.task.error` 读取原因
+- `cancelled`：已取消
 
 ### 快捷键
 
