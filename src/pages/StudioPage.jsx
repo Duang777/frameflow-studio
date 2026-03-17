@@ -61,6 +61,7 @@ export default function StudioPage() {
   const [batchText, setBatchText] = useState("");
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchResults, setBatchResults] = useState([]);
+  const [batchImageRunning, setBatchImageRunning] = useState(false);
   const [filterMode, setFilterMode] = useState("all");
   const [queueFilterMode, setQueueFilterMode] = useState(() =>
     normalizeQueueFilter(searchParams.get(QUEUE_FILTER_QUERY_KEY))
@@ -129,6 +130,10 @@ export default function StudioPage() {
   const selectedVisibleCount = useMemo(
     () => selectedIdeaIndexes.filter((index) => visibleIndexes.includes(index)).length,
     [selectedIdeaIndexes, visibleIndexes]
+  );
+  const anyImageLoading = useMemo(
+    () => ideas.some((idea) => idea?.generatedImage?.status === "loading"),
+    [ideas]
   );
 
   useEffect(() => {
@@ -518,11 +523,11 @@ export default function StudioPage() {
   const generateIdeaImage = async (index) => {
     const idea = ideas[index];
     if (!idea) {
-      return;
+      return false;
     }
 
     if (idea?.generatedImage?.status === "loading") {
-      return;
+      return false;
     }
 
     const taskId = startTaskRun({
@@ -588,7 +593,7 @@ export default function StudioPage() {
           error: "",
         });
         updateStatus("idle", "已取消", "出图任务已取消。");
-        return;
+        return false;
       }
 
       if (finalTask.status !== "success") {
@@ -614,6 +619,7 @@ export default function StudioPage() {
         summary: `第 ${index + 1} 条分镜图已生成。`,
       });
       updateStatus("success", "出图完成", `第 ${index + 1} 条分镜图已生成。`);
+      return true;
     } catch (error) {
       const message = error?.message || "出图失败，请稍后重试。";
       patchIdeaImageState(index, {
@@ -626,6 +632,7 @@ export default function StudioPage() {
         summary: message,
       });
       updateStatus("error", "出图失败", message);
+      return false;
     } finally {
       if (pendingRef.current?.taskId === backendTaskId) {
         pendingRef.current = null;
@@ -649,6 +656,40 @@ export default function StudioPage() {
     const filename = `${safeTitle || `frame-${index + 1}`}-${stamp}.png`;
     triggerDownloadFromDataUrl(filename, imageUrl);
     updateStatus("success", "图片已导出", `第 ${index + 1} 条分镜图已下载。`);
+  };
+
+  const batchGenerateSelectedImages = async () => {
+    if (selectedIdeaIndexes.length === 0) {
+      updateStatus("error", "未选中分镜", "请先选择要出图的分镜卡片。");
+      return;
+    }
+
+    if (batchImageRunning) {
+      return;
+    }
+
+    const targets = [...selectedIdeaIndexes]
+      .filter((index) => index >= 0 && index < ideas.length)
+      .sort((a, b) => a - b);
+
+    if (targets.length === 0) {
+      updateStatus("error", "未选中分镜", "当前没有可出图的分镜。");
+      return;
+    }
+
+    setBatchImageRunning(true);
+    updateStatus("loading", "批量出图中", `正在批量生成 ${targets.length} 条分镜图...`);
+
+    let successCount = 0;
+    for (const index of targets) {
+      const success = await generateIdeaImage(index);
+      if (success) {
+        successCount += 1;
+      }
+    }
+
+    setBatchImageRunning(false);
+    updateStatus("success", "批量出图完成", `已处理 ${targets.length} 条，成功 ${successCount} 条。`);
   };
 
   const remixOne = async (index) => {
@@ -1359,6 +1400,9 @@ export default function StudioPage() {
             <ToolbarButton onClick={selectAllVisible} disabled={visibleEntries.length === 0}>全选可见</ToolbarButton>
             <ToolbarButton onClick={clearSelection} disabled={selectedIdeaIndexes.length === 0}>清除选择</ToolbarButton>
             <ToolbarButton onClick={batchCopySelected} disabled={selectedIdeaIndexes.length === 0}>复制所选</ToolbarButton>
+            <ToolbarButton onClick={batchGenerateSelectedImages} disabled={selectedIdeaIndexes.length === 0 || batchImageRunning || anyImageLoading}>
+              {batchImageRunning ? "出图中" : "所选出图"}
+            </ToolbarButton>
             <ToolbarButton onClick={() => batchFavoriteSelected(true)} disabled={selectedIdeaIndexes.length === 0}>收藏所选</ToolbarButton>
             <ToolbarButton onClick={() => batchFavoriteSelected(false)} disabled={selectedIdeaIndexes.length === 0}>取消收藏</ToolbarButton>
             <ToolbarButton onClick={batchDeleteSelected} disabled={selectedIdeaIndexes.length === 0}>删除所选</ToolbarButton>
