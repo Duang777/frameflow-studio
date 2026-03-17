@@ -198,8 +198,10 @@ export default function StudioPage() {
       id,
       type,
       title,
-      status: "running",
-      summary: summary || "任务进行中...",
+      status: "pending",
+      summary: summary || "排队中...",
+      progress: 0,
+      stageText: "排队中",
       startedAt,
       finishedAt: null,
       durationMs: null,
@@ -213,9 +215,16 @@ export default function StudioPage() {
     setTaskRuns((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
+        const merged = { ...item, ...patch };
+        const derivedProgress =
+          typeof merged.progress === "number"
+            ? merged.progress
+            : merged.status === "success"
+            ? 100
+            : item.progress;
         return {
-          ...item,
-          ...patch,
+          ...merged,
+          progress: derivedProgress,
           finishedAt: endedAt,
           durationMs: Math.max(0, endedAt - Number(item.startedAt || endedAt)),
         };
@@ -323,6 +332,8 @@ export default function StudioPage() {
           const stageSummary = formatTaskStageSummary(task);
           patchTaskRun(taskId, {
             status: task.status,
+            progress: Number(task.progress) || 0,
+            stageText: String(task.stageText || ""),
             summary: stageSummary,
           });
           updateStatus("loading", "生成中", stageSummary);
@@ -332,6 +343,8 @@ export default function StudioPage() {
       if (finalTask.status === "cancelled") {
         finishTaskRun(taskId, {
           status: "cancelled",
+          progress: Number(finalTask.progress) || 0,
+          stageText: String(finalTask.stageText || "已取消"),
           summary: "请求已取消。",
         });
         updateStatus("idle", "已取消", "请求已取消。可以继续修改参数后重试。");
@@ -349,12 +362,15 @@ export default function StudioPage() {
       pushHistoryRecord(nextIdeas);
       finishTaskRun(taskId, {
         status: "success",
+        progress: 100,
+        stageText: String(finalTask.stageText || "完成"),
         summary: `生成完成，共 ${nextIdeas.length} 条。`,
       });
       updateStatus("success", "生成完成", `已生成 ${nextIdeas.length} 条分镜（${activeMode.name} / ${activeStyleLabel}）。`);
     } catch (error) {
       finishTaskRun(taskId, {
         status: "error",
+        stageText: "失败",
         summary: error.message || "生成失败，请稍后重试。",
       });
       updateStatus("error", "生成失败", error.message || "生成失败，请稍后重试。");
@@ -474,6 +490,8 @@ export default function StudioPage() {
           const stageSummary = formatTaskStageSummary(task);
           patchTaskRun(taskId, {
             status: task.status,
+            progress: Number(task.progress) || 0,
+            stageText: String(task.stageText || ""),
             summary: stageSummary,
           });
           updateStatus("loading", "再生成中", stageSummary);
@@ -483,6 +501,8 @@ export default function StudioPage() {
       if (finalTask.status === "cancelled") {
         finishTaskRun(taskId, {
           status: "cancelled",
+          progress: Number(finalTask.progress) || 0,
+          stageText: String(finalTask.stageText || "已取消"),
           summary: "请求已取消。",
         });
         updateStatus("idle", "已取消", "请求已取消。可以继续修改参数后重试。");
@@ -501,12 +521,15 @@ export default function StudioPage() {
       setIdeas((prev) => prev.map((item, idx) => (idx === index ? replacement : item)));
       finishTaskRun(taskId, {
         status: "success",
+        progress: 100,
+        stageText: String(finalTask.stageText || "完成"),
         summary: `第 ${index + 1} 条已更新。`,
       });
       updateStatus("success", "再生成完成", `第 ${index + 1} 条分镜已更新。`);
     } catch (error) {
       finishTaskRun(taskId, {
         status: "error",
+        stageText: "失败",
         summary: error.message || "请求失败。",
       });
       updateStatus("error", "再生成失败", error.message || "请求失败。");
@@ -758,6 +781,8 @@ export default function StudioPage() {
           const stageSummary = formatTaskStageSummary(task);
           patchTaskRun(taskId, {
             status: task.status,
+            progress: Number(task.progress) || 0,
+            stageText: String(task.stageText || ""),
             summary: stageSummary,
           });
           updateStatus("loading", "批量处理中", stageSummary);
@@ -767,6 +792,8 @@ export default function StudioPage() {
       if (finalTask.status === "cancelled") {
         finishTaskRun(taskId, {
           status: "cancelled",
+          progress: Number(finalTask.progress) || 0,
+          stageText: String(finalTask.stageText || "已取消"),
           summary: "请求已取消。",
         });
         updateStatus("idle", "已取消", "请求已取消。可以继续修改参数后重试。");
@@ -802,12 +829,15 @@ export default function StudioPage() {
 
       finishTaskRun(taskId, {
         status: "success",
+        progress: 100,
+        stageText: String(finalTask.stageText || "完成"),
         summary: `批量完成，共 ${seeds.length} 条，成功 ${successCount} 条。`,
       });
       updateStatus("success", "批量完成", `共 ${seeds.length} 条，成功 ${successCount} 条。`);
     } catch (error) {
       finishTaskRun(taskId, {
         status: "error",
+        stageText: "失败",
         summary: error.message || "批量处理失败。",
       });
       updateStatus("error", "批量失败", error.message || "批量处理失败。");

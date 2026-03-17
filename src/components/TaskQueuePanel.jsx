@@ -43,6 +43,8 @@ export function TaskQueuePanel({ runs, onClear, onRemove }) {
               badgeText: run.status || "Unknown",
             };
             const duration = formatDuration(run.durationMs);
+            const progress = normalizeProgress(run.progress);
+            const stageText = String(run.stageText || "").trim();
             return (
               <li
                 key={run.id}
@@ -57,8 +59,17 @@ export function TaskQueuePanel({ runs, onClear, onRemove }) {
                     <StatusBadge state={statusMeta.badgeState} text={statusMeta.badgeText} />
                     <span className="text-xs text-atelier-subtle">{formatTime(run.startedAt)}</span>
                     {duration && <span className="text-xs text-atelier-subtle">Duration {duration}</span>}
+                    <span className="text-xs text-atelier-subtle">{progress}%</span>
                   </div>
                   <p className="mt-2 truncate text-sm text-atelier-fg">{run.title}</p>
+                  {stageText && <p className="mt-1 text-xs text-atelier-subtle">{stageText}</p>}
+                  <div className="mt-2 h-1.5 w-full overflow-hidden border border-atelier-fg/10 bg-white/40">
+                    <span
+                      className="block h-full bg-atelier-accent transition-[width] duration-700 ease-out"
+                      style={{ width: `${progress}%` }}
+                      aria-hidden="true"
+                    />
+                  </div>
                   <p className="mt-1 text-xs text-atelier-subtle">{run.summary || "Processing..."}</p>
                 </div>
                 <button
@@ -82,4 +93,10 @@ function formatDuration(input) {
   if (!Number.isFinite(ms) || ms <= 0) return "";
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function normalizeProgress(input) {
+  const value = Number(input);
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
 }
