@@ -24,6 +24,14 @@ export function createBatchExpandTask(payload) {
   return post("/api/tasks/batch-expand", payload);
 }
 
+export function createImageTask(payload) {
+  return post("/api/tasks/generate-image", payload);
+}
+
+export function generateStoryboardImage(payload) {
+  return post("/api/generate-image", payload);
+}
+
 export function getTaskStatus(taskId) {
   return get(`/api/tasks/${encodeURIComponent(taskId)}`);
 }

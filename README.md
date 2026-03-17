@@ -11,6 +11,7 @@
 
 - 单条生成：文本 + 图片输入，生成 6/8/10 条分镜
 - 单条再生成：对某条结果快速 remix
+- 分镜出图：每条分镜可单独生成参考画面并下载
 - 收藏与历史：本地收藏、历史恢复、删除、清空
 - 结果区进阶交互：多选、范围选择（Shift）、批量复制/收藏/删除
 - 结果筛选：全部 / 仅收藏 / 未收藏
@@ -20,6 +21,7 @@
 - 任务队列筛选：全部 / 运行中 / 失败
 - 批量结果快捷操作：复制 seed、载入画布、复制结果、导出
 - 参数编辑器：Temperature / Top P 滑杆与数值联动
+- 双模型配置：文本生成模型与出图模型可独立配置
 - 导出：Markdown / JSON
 - 批量生成：每行一个 seed，后端顺序处理并回传每条结果
 - 后端代理：前端不再暴露 `GEMINI_API_KEY`
@@ -52,6 +54,14 @@ cp .env.example .env
 ```
 
 然后在 `.env` 中填写真实 `GEMINI_API_KEY`。
+建议同时配置：
+
+```env
+GEMINI_TEXT_MODEL=gemini-2.5-flash-image
+GEMINI_IMAGE_MODEL=gemini-3.1-flash-image-preview
+GEMINI_IMAGE_TIMEOUT_MS=90000
+```
+
 如需接入第三方 Gemini 网关，可额外设置：
 
 ```env
@@ -87,10 +97,12 @@ npm run build
 - `GET /api/modes`：模式库列表
 - `POST /api/tasks/expand`：创建单条拓展任务（异步）
 - `POST /api/tasks/batch-expand`：创建批量拓展任务（异步）
+- `POST /api/tasks/generate-image`：创建单条分镜出图任务（异步）
 - `GET /api/tasks/:taskId`：查询任务状态与结果
 - `POST /api/tasks/:taskId/cancel`：取消任务
 - `POST /api/expand`：单条生成
 - `POST /api/batch-expand`：批量生成
+- `POST /api/generate-image`：单条分镜出图
 
 ### 统一响应结构
 

@@ -12,7 +12,7 @@ import { TaskQueuePanel } from "../components/TaskQueuePanel";
 import { buildIdeaCopyText, downloadText, formatTime, toIdeaMarkdown } from "../lib/formatters";
 import { DEFAULT_PROMPT_TEMPLATE, getModeById, STORYBOARD_MODES, STYLE_BIASES } from "../lib/modes";
 import { useLocalStorageState } from "../lib/storage";
-import { cancelTaskById, createBatchExpandTask, createExpandTask, getTaskStatus } from "../services/studioApi";
+import { cancelTaskById, createBatchExpandTask, createExpandTask, createImageTask, getTaskStatus } from "../services/studioApi";
 
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const PLACEHOLDER_IMAGE =
@@ -21,6 +21,8 @@ const PLACEHOLDER_IMAGE =
 const defaultSettings = {
   seedText: "",
   model: "gemini-2.5-flash-image",
+  textModel: "gemini-2.5-flash-image",
+  imageModel: "gemini-2.5-flash-image",
   styleBias: "cinematic",
   modeId: "ad-film",
   ideaCount: 8,
@@ -74,6 +76,8 @@ export default function StudioPage() {
     () => STYLE_BIASES.find((item) => item.id === settings.styleBias)?.label || settings.styleBias,
     [settings.styleBias]
   );
+  const textModelValue = settings.textModel || settings.model || defaultSettings.textModel;
+  const imageModelValue = settings.imageModel || settings.textModel || settings.model || defaultSettings.imageModel;
 
   const batchCount = useMemo(
     () =>
@@ -352,7 +356,7 @@ export default function StudioPage() {
     const taskId = startTaskRun({
       type: "expand",
       title: `拓展分镜 · ${activeMode.name}`,
-      summary: `模型 ${settings.model} / 目标 ${settings.ideaCount} 条`,
+      summary: `文本模型 ${textModelValue} / 目标 ${settings.ideaCount} 条`,
     });
 
     setLoading(true);
@@ -369,7 +373,7 @@ export default function StudioPage() {
         temperature: Number(settings.temperature),
         topP: Number(settings.topP),
         promptTemplate: settings.promptTemplate,
-        model: settings.model,
+        model: textModelValue,
       });
 
       backendTaskId = createResult?.task?.id || "";
@@ -495,6 +499,158 @@ export default function StudioPage() {
     }
   };
 
+  const patchIdeaImageState = (index, patch) => {
+    setIdeas((prev) =>
+      prev.map((idea, idx) => {
+        if (idx !== index) return idea;
+        const prevImage = idea?.generatedImage || { status: "idle", url: "", error: "", model: "" };
+        return {
+          ...idea,
+          generatedImage: {
+            ...prevImage,
+            ...patch,
+          },
+        };
+      })
+    );
+  };
+
+  const generateIdeaImage = async (index) => {
+    const idea = ideas[index];
+    if (!idea) {
+      return;
+    }
+
+    if (idea?.generatedImage?.status === "loading") {
+      return;
+    }
+
+    const taskId = startTaskRun({
+      type: "image",
+      title: `分镜图 #${index + 1}`,
+      summary: `${idea.title || "分镜出图"} · ${imageModelValue}`,
+    });
+
+    patchIdeaImageState(index, {
+      status: "loading",
+      error: "",
+    });
+    updateStatus("loading", "出图中", `正在生成第 ${index + 1} 条分镜图...`);
+    let backendTaskId = "";
+
+    try {
+      const ideaPayload = {
+        title: idea.title,
+        scene: idea.scene,
+        camera: idea.camera,
+        mood: idea.mood,
+        twist: idea.twist,
+        seedIdea: idea.seedIdea,
+      };
+
+      const createResult = await createImageTask({
+        idea: ideaPayload,
+        seedText: settings.seedText,
+        modeId: settings.modeId,
+        styleBias: settings.styleBias,
+        imageModel: imageModelValue,
+      });
+
+      backendTaskId = createResult?.task?.id || "";
+      if (!backendTaskId) {
+        throw new Error("任务创建失败，请重试。");
+      }
+
+      pendingRef.current = { taskId: backendTaskId, kind: "image" };
+
+      const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
+        if (task.status === "running" || task.status === "pending") {
+          const stageSummary = formatTaskStageSummary(task);
+          patchTaskRun(taskId, {
+            status: task.status,
+            progress: Number(task.progress) || 0,
+            stageText: String(task.stageText || ""),
+            summary: stageSummary,
+          });
+          updateStatus("loading", "出图中", stageSummary);
+        }
+      });
+
+      if (finalTask.status === "cancelled") {
+        finishTaskRun(taskId, {
+          status: "cancelled",
+          progress: Number(finalTask.progress) || 0,
+          stageText: String(finalTask.stageText || "已取消"),
+          summary: "请求已取消。",
+        });
+        patchIdeaImageState(index, {
+          status: "idle",
+          error: "",
+        });
+        updateStatus("idle", "已取消", "出图任务已取消。");
+        return;
+      }
+
+      if (finalTask.status !== "success") {
+        throw new Error(finalTask.error || "出图失败，请稍后重试。");
+      }
+
+      const imageDataUrl = String(finalTask?.result?.imageDataUrl || "");
+      if (!imageDataUrl) {
+        throw new Error("模型未返回图片，请切换支持出图的模型后重试。");
+      }
+
+      patchIdeaImageState(index, {
+        status: "success",
+        url: imageDataUrl,
+        error: "",
+        model: String(finalTask?.result?.model || imageModelValue),
+      });
+
+      finishTaskRun(taskId, {
+        status: "success",
+        progress: 100,
+        stageText: String(finalTask.stageText || "完成"),
+        summary: `第 ${index + 1} 条分镜图已生成。`,
+      });
+      updateStatus("success", "出图完成", `第 ${index + 1} 条分镜图已生成。`);
+    } catch (error) {
+      const message = error?.message || "出图失败，请稍后重试。";
+      patchIdeaImageState(index, {
+        status: "error",
+        error: message,
+      });
+      finishTaskRun(taskId, {
+        status: "error",
+        stageText: "失败",
+        summary: message,
+      });
+      updateStatus("error", "出图失败", message);
+    } finally {
+      if (pendingRef.current?.taskId === backendTaskId) {
+        pendingRef.current = null;
+      }
+    }
+  };
+
+  const downloadIdeaImage = (index) => {
+    const idea = ideas[index];
+    const imageUrl = String(idea?.generatedImage?.url || "");
+    if (!imageUrl.startsWith("data:image/")) {
+      updateStatus("error", "无可下载图片", "请先生成分镜图。");
+      return;
+    }
+
+    const stamp = formatFileStamp(new Date());
+    const safeTitle = String(idea?.title || `frame-${index + 1}`)
+      .replace(/[\\/:*?"<>|]/g, "-")
+      .replace(/\s+/g, "-")
+      .slice(0, 40);
+    const filename = `${safeTitle || `frame-${index + 1}`}-${stamp}.png`;
+    triggerDownloadFromDataUrl(filename, imageUrl);
+    updateStatus("success", "图片已导出", `第 ${index + 1} 条分镜图已下载。`);
+  };
+
   const remixOne = async (index) => {
     if (loading) {
       return;
@@ -527,7 +683,7 @@ export default function StudioPage() {
         temperature: Number(settings.temperature),
         topP: Number(settings.topP),
         promptTemplate: settings.promptTemplate,
-        model: settings.model,
+        model: textModelValue,
       });
 
       backendTaskId = createResult?.task?.id || "";
@@ -881,7 +1037,7 @@ export default function StudioPage() {
         temperature: Number(settings.temperature),
         topP: Number(settings.topP),
         promptTemplate: settings.promptTemplate,
-        model: settings.model,
+        model: textModelValue,
       });
 
       backendTaskId = createResult?.task?.id || "";
@@ -1055,10 +1211,18 @@ export default function StudioPage() {
                   />
                 </FieldLabel>
 
-                <FieldLabel label="模型">
+                <FieldLabel label="文本模型">
                   <input
-                    value={settings.model}
-                    onChange={(event) => updateSettings({ model: event.target.value })}
+                    value={textModelValue}
+                    onChange={(event) => updateSettings({ textModel: event.target.value })}
+                    className="w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm outline-none transition-colors duration-500 focus:border-atelier-accent"
+                  />
+                </FieldLabel>
+
+                <FieldLabel label="出图模型">
+                  <input
+                    value={imageModelValue}
+                    onChange={(event) => updateSettings({ imageModel: event.target.value })}
                     className="w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm outline-none transition-colors duration-500 focus:border-atelier-accent"
                   />
                 </FieldLabel>
@@ -1157,6 +1321,8 @@ export default function StudioPage() {
               <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">模式 · {activeMode.name}</span>
               <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">风格 · {activeStyleLabel}</span>
               <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">条数 · {settings.ideaCount}</span>
+              <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">文本模型 · {textModelValue}</span>
+              <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">出图模型 · {imageModelValue}</span>
             </div>
           </section>
 
@@ -1230,10 +1396,13 @@ export default function StudioPage() {
                     index={index}
                     onCopy={copySingle}
                     onRemix={remixOne}
+                    onGenerateImage={generateIdeaImage}
+                    onDownloadImage={downloadIdeaImage}
                     onFavorite={toggleFavorite}
                     favorite={favorite}
                     selected={selectedIdeaIndexes.includes(index)}
                     onToggleSelect={(event) => toggleSelectIdea(index, event.shiftKey)}
+                    imageState={idea.generatedImage}
                   />
                 );
               })}
@@ -1330,6 +1499,15 @@ function delay(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function triggerDownloadFromDataUrl(filename, dataUrl) {
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 function formatTaskStageSummary(task) {

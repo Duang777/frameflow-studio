@@ -11,13 +11,16 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const DEFAULT_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-image";
+const LEGACY_DEFAULT_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-image";
+const DEFAULT_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || LEGACY_DEFAULT_MODEL;
+const DEFAULT_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || DEFAULT_TEXT_MODEL;
 const GEMINI_ENDPOINT = String(process.env.GEMINI_ENDPOINT || "").trim();
 const GEMINI_API_KEY_MODE = String(process.env.GEMINI_API_KEY_MODE || "auto")
   .trim()
   .toLowerCase();
 const GEMINI_KEY_HEADER = String(process.env.GEMINI_KEY_HEADER || "x-api-key").trim();
 const REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 50000);
+const IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_TIMEOUT_MS || Math.max(REQUEST_TIMEOUT_MS, 90000));
 
 app.use(cors());
 app.use(express.json({ limit: "12mb" }));
@@ -28,7 +31,8 @@ app.get("/api/health", (_req, res) => {
       {
         ok: true,
         hasApiKey: Boolean(GEMINI_API_KEY),
-        defaultModel: DEFAULT_MODEL,
+        defaultTextModel: DEFAULT_TEXT_MODEL,
+        defaultImageModel: DEFAULT_IMAGE_MODEL,
         endpointConfigured: Boolean(GEMINI_ENDPOINT),
         authMode: resolveAuthMode(GEMINI_API_KEY_MODE, GEMINI_ENDPOINT, GEMINI_API_KEY),
       },
@@ -140,6 +144,43 @@ app.post("/api/tasks/batch-expand", async (req, res) => {
   res.status(202).json(success({ task }, "task created"));
 });
 
+app.post("/api/tasks/generate-image", async (req, res) => {
+  if (!ensureApiKey(res)) {
+    return;
+  }
+
+  const input = req.body || {};
+  if (!hasImageSeed(input)) {
+    res.status(400).json(failure("请至少提供一条分镜内容作为出图输入。", 400));
+    return;
+  }
+
+  const task = createTask({
+    type: "image",
+    payload: sanitizeTaskPayload(input),
+    run: async (ctx) => {
+      ctx.setProgress(5);
+      ctx.setStage("queued", "排队中");
+      const result = await generateImage(input, {
+        onStage: (stage, stageText, progress) => {
+          if (ctx.isCancelled()) return;
+          if (typeof progress === "number") {
+            ctx.setProgress(progress);
+          }
+          ctx.setStage(stage, stageText);
+        },
+      });
+
+      if (ctx.isCancelled()) return {};
+      ctx.setProgress(100);
+      ctx.setStage("completed", "完成");
+      return result;
+    },
+  });
+
+  res.status(202).json(success({ task }, "task created"));
+});
+
 app.get("/api/tasks/:taskId", (req, res) => {
   const task = getTask(String(req.params.taskId || "").trim());
   if (!task) {
@@ -203,6 +244,20 @@ app.post("/api/batch-expand", async (req, res) => {
   res.json(success({ results }, "batch expand completed"));
 });
 
+app.post("/api/generate-image", async (req, res) => {
+  if (!ensureApiKey(res)) {
+    return;
+  }
+
+  try {
+    const result = await generateImage(req.body);
+    res.json(success(result, "image generated"));
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json(failure(error.message || "生成失败", statusCode));
+  }
+});
+
 app.use((error, _req, res, _next) => {
   const statusCode = error?.statusCode || 500;
   res.status(statusCode).json(failure(error?.message || "服务器异常", statusCode));
@@ -233,6 +288,8 @@ function sanitizeTaskPayload(input) {
     styleBias: body.styleBias,
     ideaCount: body.ideaCount,
     model: body.model,
+    textModel: body.textModel,
+    imageModel: body.imageModel,
   };
 }
 
@@ -254,7 +311,7 @@ async function generateOne(input, options = {}) {
   const ideaCount = clampInt(input?.ideaCount, 8, 1, 12);
   const temperature = clampFloat(input?.temperature, 1, 0, 2);
   const topP = clampFloat(input?.topP, 0.9, 0, 1);
-  const model = sanitizeModel(input?.model) || DEFAULT_MODEL;
+  const model = sanitizeModel(input?.model || input?.textModel) || DEFAULT_TEXT_MODEL;
   const promptTemplate = String(input?.promptTemplate || "");
 
   if (!seedText && !imageDataUrl) {
@@ -367,6 +424,121 @@ async function generateOne(input, options = {}) {
   };
 }
 
+async function generateImage(input, options = {}) {
+  const onStage = typeof options?.onStage === "function" ? options.onStage : () => {};
+  const idea = input?.idea && typeof input.idea === "object" ? input.idea : {};
+  const seedText = String(input?.seedText || "").trim();
+  const styleBias = String(input?.styleBias || "cinematic");
+  const modeId = String(input?.modeId || "ad-film");
+  const model = sanitizeModel(input?.imageModel || input?.model) || DEFAULT_IMAGE_MODEL;
+  const mode = getModeById(modeId);
+  const styleHint = STYLE_HINTS[styleBias] || STYLE_HINTS.cinematic;
+
+  const imagePrompt = buildImagePrompt({
+    idea,
+    seedText,
+    styleHint,
+    mode,
+  });
+
+  if (!imagePrompt.trim()) {
+    const error = new Error("缺少可用于出图的分镜内容。");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  onStage("validating", "校验输入", 15);
+
+  const geminiPayload = {
+    contents: [{ role: "user", parts: [{ text: imagePrompt }] }],
+    generationConfig: {
+      responseModalities: ["IMAGE"],
+    },
+  };
+
+  const authMode = resolveAuthMode(GEMINI_API_KEY_MODE, GEMINI_ENDPOINT, GEMINI_API_KEY);
+  const endpoint = buildGeminiEndpoint({
+    endpointTemplate: GEMINI_ENDPOINT,
+    model,
+    apiKey: GEMINI_API_KEY,
+    authMode,
+  });
+  const headers = buildGeminiHeaders({
+    apiKey: GEMINI_API_KEY,
+    authMode,
+    keyHeader: GEMINI_KEY_HEADER,
+  });
+
+  const requestOnce = async (payload, stageProgress) => {
+    onStage("requesting_model", "请求模型", stageProgress);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), IMAGE_REQUEST_TIMEOUT_MS);
+
+    let response;
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      clearTimeout(timeout);
+      if (error.name === "AbortError") {
+        const timeoutError = new Error(`请求超时（>${IMAGE_REQUEST_TIMEOUT_MS / 1000}s），请重试。`);
+        timeoutError.statusCode = 504;
+        throw timeoutError;
+      }
+
+      const networkError = new Error("请求 Gemini 失败，请检查网络或代理设置。", { cause: error });
+      networkError.statusCode = 502;
+      throw networkError;
+    }
+
+    clearTimeout(timeout);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = body?.error?.message || `HTTP ${response.status}`;
+      const mapped = mapGeminiError(response.status, detail);
+      const apiError = new Error(mapped);
+      apiError.statusCode = response.status;
+      throw apiError;
+    }
+    return body;
+  };
+
+  let body = await requestOnce(geminiPayload, 45);
+  let generatedImage = extractGeneratedImage(body);
+
+  if (!generatedImage?.dataUrl && isNoImageResponse(body)) {
+    const fallbackPayload = {
+      contents: [{ role: "user", parts: [{ text: buildFallbackImagePrompt({ idea, seedText, mode, styleHint }) }] }],
+      generationConfig: {
+        responseModalities: ["IMAGE"],
+      },
+    };
+    onStage("retrying", "重试出图", 66);
+    body = await requestOnce(fallbackPayload, 70);
+    generatedImage = extractGeneratedImage(body);
+  }
+
+  onStage("parsing_result", "解析结果", 88);
+  if (!generatedImage?.dataUrl) {
+    const detail = summarizeCandidateParts(body);
+    const invalid = new Error(`模型未返回图片。请检查出图模型是否支持 IMAGE 输出。${detail ? `（${detail}）` : ""}`);
+    invalid.statusCode = 502;
+    throw invalid;
+  }
+
+  onStage("completed", "完成", 100);
+  return {
+    imageDataUrl: generatedImage.dataUrl,
+    mimeType: generatedImage.mimeType,
+    model,
+    prompt: imagePrompt,
+  };
+}
+
 function buildPrompt({ promptTemplate, ideaCount, seedText, imageProvided, styleHint, mode }) {
   const fallbackTemplate = `你是资深分镜导演与镜头设计顾问。
 目标：输出 {{count}} 条分镜拓展方向。
@@ -384,6 +556,54 @@ function buildPrompt({ promptTemplate, ideaCount, seedText, imageProvided, style
     `文本输入：${source}`,
     `图片输入：${imageProvided ? "已提供" : "未提供"}`,
   ].join("\n");
+}
+
+function buildImagePrompt({ idea, seedText, styleHint, mode }) {
+  const title = cleanText(idea?.title);
+  const scene = cleanText(idea?.scene);
+  const camera = cleanText(idea?.camera);
+  const mood = cleanText(idea?.mood);
+  const twist = cleanText(idea?.twist);
+  const source = cleanText(seedText);
+
+  return [
+    "你是一名电影分镜概念美术师。请根据以下描述生成一张高质量电影分镜图。",
+    "要求：真实电影质感、明确主次关系、构图清晰、可用于前期提案。",
+    "风格：不要出现水印、文字、Logo、字幕。",
+    "",
+    `模式：${mode.name}`,
+    `风格倾向：${styleHint}`,
+    source ? `原始种子：${source}` : "",
+    title ? `分镜标题：${title}` : "",
+    scene ? `画面描述：${scene}` : "",
+    camera ? `镜头语言：${camera}` : "",
+    mood ? `氛围情绪：${mood}` : "",
+    twist ? `转折亮点：${twist}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildFallbackImagePrompt({ idea, seedText, mode, styleHint }) {
+  const title = cleanText(idea?.title);
+  const scene = cleanText(idea?.scene);
+  const camera = cleanText(idea?.camera);
+  const mood = cleanText(idea?.mood);
+  const source = cleanText(seedText);
+
+  return [
+    "Create ONE cinematic storyboard frame as an image only.",
+    "No text, no subtitle, no logo, no watermark.",
+    `Mode: ${mode.name}`,
+    `Style bias: ${styleHint}`,
+    source ? `Seed: ${source}` : "",
+    title ? `Title: ${title}` : "",
+    scene ? `Scene: ${scene}` : "",
+    camera ? `Camera: ${camera}` : "",
+    mood ? `Mood: ${mood}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function parseImagePart(dataUrl) {
@@ -407,6 +627,60 @@ function parseImagePart(dataUrl) {
       data,
     },
   };
+}
+
+function extractGeneratedImage(body) {
+  const candidates = Array.isArray(body?.candidates) ? body.candidates : [];
+  for (const candidate of candidates) {
+    const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+    for (const part of parts) {
+      const inlineData = part?.inlineData || part?.inline_data;
+      const data = String(inlineData?.data || part?.data || "").trim();
+      if (data) {
+        const mimeType = String(inlineData?.mimeType || inlineData?.mime_type || "image/png").trim();
+        return {
+          dataUrl: `data:${mimeType};base64,${data}`,
+          mimeType,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function isNoImageResponse(body) {
+  const reason = String(body?.candidates?.[0]?.finishReason || "").trim().toUpperCase();
+  return reason === "NO_IMAGE";
+}
+
+function summarizeCandidateParts(body) {
+  const candidates = Array.isArray(body?.candidates) ? body.candidates : [];
+  const blockReason = String(body?.promptFeedback?.blockReason || "").trim();
+  const firstFinishReason = String(candidates?.[0]?.finishReason || "").trim();
+  const hint = [blockReason ? `blockReason=${blockReason}` : "", firstFinishReason ? `finishReason=${firstFinishReason}` : ""]
+    .filter(Boolean)
+    .join(", ");
+
+  if (candidates.length === 0) {
+    return hint ? `响应中无 candidates, ${hint}` : "响应中无 candidates";
+  }
+
+  const parts = Array.isArray(candidates[0]?.content?.parts) ? candidates[0].content.parts : [];
+  if (parts.length === 0) {
+    return hint ? `candidates 无 parts, ${hint}` : "candidates 无 parts";
+  }
+
+  const labels = parts.map((part) => {
+    const flags = [];
+    if (part?.inlineData) flags.push("inlineData");
+    if (part?.inline_data) flags.push("inline_data");
+    if (typeof part?.text === "string") flags.push("text");
+    if (part?.data) flags.push("data");
+    return flags.join("+") || "unknown";
+  });
+
+  return hint ? `parts: ${labels.join(",")}, ${hint}` : `parts: ${labels.join(",")}`;
 }
 
 function extractText(body) {
@@ -449,6 +723,22 @@ function sanitizeModel(value) {
   const model = String(value || "").trim();
   if (!model) return "";
   return model.slice(0, 100);
+}
+
+function cleanText(value) {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function hasImageSeed(input) {
+  const idea = input?.idea && typeof input.idea === "object" ? input.idea : {};
+  return Boolean(
+    String(idea?.title || "").trim() ||
+      String(idea?.scene || "").trim() ||
+      String(idea?.camera || "").trim() ||
+      String(idea?.mood || "").trim() ||
+      String(idea?.twist || "").trim() ||
+      String(input?.seedText || "").trim()
+  );
 }
 
 function resolveAuthMode(rawMode, endpointTemplate, apiKey) {

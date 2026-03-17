@@ -14,6 +14,7 @@ const TYPE_LABEL_MAP = {
   expand: "Expand",
   remix: "Remix",
   batch: "Batch",
+  image: "Image",
 };
 
 const FILTER_OPTIONS = {
