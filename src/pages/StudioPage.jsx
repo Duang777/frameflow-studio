@@ -6,6 +6,7 @@ import { IdeaCard } from "../components/IdeaCard";
 import { ModeLibrary } from "../components/ModeLibrary";
 import { PrimaryButton } from "../components/PrimaryButton";
 import { StatusBadge } from "../components/StatusBadge";
+import { TaskQueuePanel } from "../components/TaskQueuePanel";
 import { buildIdeaCopyText, downloadText, formatTime, toIdeaMarkdown } from "../lib/formatters";
 import { DEFAULT_PROMPT_TEMPLATE, getModeById, STORYBOARD_MODES, STYLE_BIASES } from "../lib/modes";
 import { useLocalStorageState } from "../lib/storage";
@@ -32,10 +33,13 @@ const FILTER_MODES = [
   { id: "unstarred", label: "未收藏" },
 ];
 
+const MAX_TASK_RUNS = 20;
+
 export default function StudioPage() {
   const [settings, setSettings] = useLocalStorageState("atelier_settings_react", defaultSettings);
   const [history, setHistory] = useLocalStorageState("atelier_history_react", []);
   const [favorites, setFavorites] = useLocalStorageState("atelier_favorites_react", {});
+  const [taskRuns, setTaskRuns] = useLocalStorageState("atelier_task_runs_react", []);
 
   const [ideas, setIdeas] = useState([]);
   const [imageState, setImageState] = useState({ dataUrl: "", name: "" });
@@ -186,6 +190,41 @@ export default function StudioPage() {
 
   const updateStatus = (kind, badge, text) => setStatus({ kind, badge, text });
 
+  const startTaskRun = ({ type, title, summary }) => {
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    const startedAt = Date.now();
+    const item = {
+      id,
+      type,
+      title,
+      status: "running",
+      summary: summary || "任务进行中...",
+      startedAt,
+      finishedAt: null,
+      durationMs: null,
+    };
+    setTaskRuns((prev) => [item, ...prev].slice(0, MAX_TASK_RUNS));
+    return id;
+  };
+
+  const finishTaskRun = (id, patch) => {
+    const endedAt = Date.now();
+    setTaskRuns((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        return {
+          ...item,
+          ...patch,
+          finishedAt: endedAt,
+          durationMs: Math.max(0, endedAt - Number(item.startedAt || endedAt)),
+        };
+      })
+    );
+  };
+
+  const removeTaskRun = (id) => setTaskRuns((prev) => prev.filter((item) => item.id !== id));
+  const clearTaskRuns = () => setTaskRuns([]);
+
   const handleImageChange = async (event) => {
     const file = event.target.files?.[0];
     if (!file) {
@@ -222,6 +261,12 @@ export default function StudioPage() {
       return;
     }
 
+    const taskId = startTaskRun({
+      type: "expand",
+      title: `拓展分镜 · ${activeMode.name}`,
+      summary: `模型 ${settings.model} / 目标 ${settings.ideaCount} 条`,
+    });
+
     setLoading(true);
     updateStatus("loading", "生成中", "正在调用后端代理生成分镜，请稍候...");
 
@@ -249,8 +294,17 @@ export default function StudioPage() {
       setSelectedIdeaIndexes([]);
       setLastSelectedIndex(null);
       pushHistoryRecord(nextIdeas);
+      finishTaskRun(taskId, {
+        status: "success",
+        summary: `生成完成，共 ${nextIdeas.length} 条。`,
+      });
       updateStatus("success", "生成完成", `已生成 ${nextIdeas.length} 条分镜（${activeMode.name} / ${activeStyleLabel}）。`);
     } catch (error) {
+      const isCancelled = error?.name === "AbortError";
+      finishTaskRun(taskId, {
+        status: isCancelled ? "cancelled" : "error",
+        summary: isCancelled ? "请求已取消。" : error.message || "生成失败，请稍后重试。",
+      });
       updateStatus("error", "生成失败", error.message || "生成失败，请稍后重试。");
     } finally {
       pendingRef.current = null;
@@ -261,7 +315,7 @@ export default function StudioPage() {
   const handleCancel = () => {
     if (pendingRef.current) {
       pendingRef.current.abort();
-      updateStatus("error", "已取消", "请求已取消。可以继续修改参数后重试。");
+      updateStatus("idle", "已取消", "请求已取消。可以继续修改参数后重试。");
       setLoading(false);
     }
   };
@@ -317,6 +371,12 @@ export default function StudioPage() {
       return;
     }
 
+    const taskId = startTaskRun({
+      type: "remix",
+      title: `再生成 #${index + 1}`,
+      summary: source.title || "分镜再生成任务",
+    });
+
     setLoading(true);
     updateStatus("loading", "再生成中", `正在重写第 ${index + 1} 条分镜...`);
 
@@ -346,8 +406,17 @@ export default function StudioPage() {
       }
 
       setIdeas((prev) => prev.map((item, idx) => (idx === index ? replacement : item)));
+      finishTaskRun(taskId, {
+        status: "success",
+        summary: `第 ${index + 1} 条已更新。`,
+      });
       updateStatus("success", "再生成完成", `第 ${index + 1} 条分镜已更新。`);
     } catch (error) {
+      const isCancelled = error?.name === "AbortError";
+      finishTaskRun(taskId, {
+        status: isCancelled ? "cancelled" : "error",
+        summary: isCancelled ? "请求已取消。" : error.message || "请求失败。",
+      });
       updateStatus("error", "再生成失败", error.message || "请求失败。");
     } finally {
       pendingRef.current = null;
@@ -561,6 +630,12 @@ export default function StudioPage() {
       return;
     }
 
+    const taskId = startTaskRun({
+      type: "batch",
+      title: `批量生成 · ${seeds.length} 条种子`,
+      summary: `模式 ${activeMode.name} / 风格 ${activeStyleLabel}`,
+    });
+
     setBatchRunning(true);
     updateStatus("loading", "批量处理中", `正在处理 ${seeds.length} 条任务，请稍候...`);
 
@@ -599,8 +674,16 @@ export default function StudioPage() {
         setHistory((prev) => [...successHistory, ...prev].slice(0, 30));
       }
 
+      finishTaskRun(taskId, {
+        status: "success",
+        summary: `批量完成，共 ${seeds.length} 条，成功 ${successCount} 条。`,
+      });
       updateStatus("success", "批量完成", `共 ${seeds.length} 条，成功 ${successCount} 条。`);
     } catch (error) {
+      finishTaskRun(taskId, {
+        status: "error",
+        summary: error.message || "批量处理失败。",
+      });
       updateStatus("error", "批量失败", error.message || "批量处理失败。");
     } finally {
       setBatchRunning(false);
@@ -891,6 +974,8 @@ export default function StudioPage() {
               })}
             </section>
           )}
+
+          <TaskQueuePanel runs={taskRuns} onClear={clearTaskRuns} onRemove={removeTaskRun} />
 
           <HistoryPanel history={history} onRestore={restoreHistory} onRemove={removeHistory} onClear={clearHistory} />
         </section>
