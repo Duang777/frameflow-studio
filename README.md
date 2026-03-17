@@ -52,6 +52,16 @@ cp .env.example .env
 ```
 
 然后在 `.env` 中填写真实 `GEMINI_API_KEY`。
+如需接入第三方 Gemini 网关，可额外设置：
+
+```env
+GEMINI_ENDPOINT=https://www.dmxapi.cn/v1beta/models/{model}:generateContent
+GEMINI_API_KEY_MODE=auto
+GEMINI_KEY_HEADER=x-api-key
+```
+
+- `GEMINI_API_KEY_MODE` 支持：`auto` / `query` / `bearer` / `header` / `none`
+- 默认 `auto` 会根据 endpoint 与 key 形态自动推断（第三方 `sk-` key 默认走 `bearer`）
 
 3. 启动开发环境（前后端一起）
 
@@ -125,7 +135,7 @@ npm run build
   "ideaCount": 8,
   "temperature": 1,
   "topP": 0.9,
-  "model": "gemini-2.0-flash",
+  "model": "gemini-2.5-flash-image",
   "promptTemplate": "..."
 }
 ```

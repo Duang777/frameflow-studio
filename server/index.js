@@ -11,14 +11,30 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const DEFAULT_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+const DEFAULT_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-image";
+const GEMINI_ENDPOINT = String(process.env.GEMINI_ENDPOINT || "").trim();
+const GEMINI_API_KEY_MODE = String(process.env.GEMINI_API_KEY_MODE || "auto")
+  .trim()
+  .toLowerCase();
+const GEMINI_KEY_HEADER = String(process.env.GEMINI_KEY_HEADER || "x-api-key").trim();
 const REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 50000);
 
 app.use(cors());
 app.use(express.json({ limit: "12mb" }));
 
 app.get("/api/health", (_req, res) => {
-  res.json(success({ ok: true, hasApiKey: Boolean(GEMINI_API_KEY), defaultModel: DEFAULT_MODEL }, "service healthy"));
+  res.json(
+    success(
+      {
+        ok: true,
+        hasApiKey: Boolean(GEMINI_API_KEY),
+        defaultModel: DEFAULT_MODEL,
+        endpointConfigured: Boolean(GEMINI_ENDPOINT),
+        authMode: resolveAuthMode(GEMINI_API_KEY_MODE, GEMINI_ENDPOINT, GEMINI_API_KEY),
+      },
+      "service healthy"
+    )
+  );
 });
 
 app.get("/api/modes", (_req, res) => {
@@ -276,7 +292,18 @@ async function generateOne(input, options = {}) {
     },
   };
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const authMode = resolveAuthMode(GEMINI_API_KEY_MODE, GEMINI_ENDPOINT, GEMINI_API_KEY);
+  const endpoint = buildGeminiEndpoint({
+    endpointTemplate: GEMINI_ENDPOINT,
+    model,
+    apiKey: GEMINI_API_KEY,
+    authMode,
+  });
+  const headers = buildGeminiHeaders({
+    apiKey: GEMINI_API_KEY,
+    authMode,
+    keyHeader: GEMINI_KEY_HEADER,
+  });
   onStage("requesting_model", "请求模型", 38);
 
   const controller = new AbortController();
@@ -286,7 +313,7 @@ async function generateOne(input, options = {}) {
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(geminiPayload),
       signal: controller.signal,
     });
@@ -422,5 +449,61 @@ function sanitizeModel(value) {
   const model = String(value || "").trim();
   if (!model) return "";
   return model.slice(0, 100);
+}
+
+function resolveAuthMode(rawMode, endpointTemplate, apiKey) {
+  const mode = String(rawMode || "").trim().toLowerCase();
+  if (mode === "query" || mode === "bearer" || mode === "header" || mode === "none") {
+    return mode;
+  }
+
+  if (!apiKey) {
+    return "none";
+  }
+
+  if (!endpointTemplate || /generativelanguage\.googleapis\.com/i.test(endpointTemplate)) {
+    return "query";
+  }
+
+  if (String(apiKey).startsWith("sk-")) {
+    return "bearer";
+  }
+
+  return "query";
+}
+
+function buildGeminiEndpoint({ endpointTemplate, model, apiKey, authMode }) {
+  const fallback = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const endpoint = endpointTemplate
+    ? endpointTemplate.includes("{model}")
+      ? endpointTemplate.replaceAll("{model}", encodeURIComponent(model))
+      : endpointTemplate
+    : fallback;
+
+  if (authMode !== "query" || !apiKey) {
+    return endpoint;
+  }
+
+  const url = new URL(endpoint);
+  url.searchParams.set("key", apiKey);
+  return url.toString();
+}
+
+function buildGeminiHeaders({ apiKey, authMode, keyHeader }) {
+  const headers = {
+    "Content-Type": "application/json",
+  };
+
+  if (!apiKey || authMode === "none" || authMode === "query") {
+    return headers;
+  }
+
+  if (authMode === "bearer") {
+    headers.Authorization = `Bearer ${apiKey}`;
+    return headers;
+  }
+
+  headers[keyHeader || "x-api-key"] = apiKey;
+  return headers;
 }
 

@@ -20,7 +20,7 @@ const PLACEHOLDER_IMAGE =
 
 const defaultSettings = {
   seedText: "",
-  model: "gemini-2.0-flash",
+  model: "gemini-2.5-flash-image",
   styleBias: "cinematic",
   modeId: "ad-film",
   ideaCount: 8,
