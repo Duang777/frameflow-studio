@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { BatchWorkflow } from "../components/BatchWorkflow";
 import { EditorialSelect } from "../components/EditorialSelect";
 import { HistoryPanel } from "../components/HistoryPanel";
@@ -37,8 +37,15 @@ const FILTER_MODES = [
 
 const MAX_TASK_RUNS = 20;
 const FINAL_TASK_STATUSES = ["success", "error", "cancelled"];
+const QUEUE_FILTER_QUERY_KEY = "queue";
+const QUEUE_FILTER_MODES = {
+  all: true,
+  running: true,
+  failed: true,
+};
 
 export default function StudioPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [settings, setSettings] = useLocalStorageState("atelier_settings_react", defaultSettings);
   const [history, setHistory] = useLocalStorageState("atelier_history_react", []);
   const [favorites, setFavorites] = useLocalStorageState("atelier_favorites_react", {});
@@ -53,6 +60,9 @@ export default function StudioPage() {
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchResults, setBatchResults] = useState([]);
   const [filterMode, setFilterMode] = useState("all");
+  const [queueFilterMode, setQueueFilterMode] = useState(() =>
+    normalizeQueueFilter(searchParams.get(QUEUE_FILTER_QUERY_KEY))
+  );
   const [selectedIdeaIndexes, setSelectedIdeaIndexes] = useState([]);
   const [lastSelectedIndex, setLastSelectedIndex] = useState(null);
 
@@ -134,6 +144,27 @@ export default function StudioPage() {
     setSelectedIdeaIndexes((prev) => prev.filter((index) => index >= 0 && index < max));
     setLastSelectedIndex((prev) => (typeof prev === "number" && prev < max ? prev : null));
   }, [ideas.length]);
+
+  useEffect(() => {
+    const nextMode = normalizeQueueFilter(searchParams.get(QUEUE_FILTER_QUERY_KEY));
+    setQueueFilterMode((prev) => (prev === nextMode ? prev : nextMode));
+  }, [searchParams]);
+
+  useEffect(() => {
+    const currentMode = normalizeQueueFilter(searchParams.get(QUEUE_FILTER_QUERY_KEY));
+    if (currentMode === queueFilterMode) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    if (queueFilterMode === "all") {
+      nextParams.delete(QUEUE_FILTER_QUERY_KEY);
+    } else {
+      nextParams.set(QUEUE_FILTER_QUERY_KEY, queueFilterMode);
+    }
+
+    setSearchParams(nextParams, { replace: true });
+  }, [queueFilterMode, searchParams, setSearchParams]);
 
   useEffect(() => {
     const handler = async (event) => {
@@ -1209,7 +1240,13 @@ export default function StudioPage() {
             </section>
           )}
 
-          <TaskQueuePanel runs={taskRuns} onClear={clearTaskRuns} onRemove={removeTaskRun} />
+          <TaskQueuePanel
+            runs={taskRuns}
+            onClear={clearTaskRuns}
+            onRemove={removeTaskRun}
+            filterMode={queueFilterMode}
+            onFilterChange={setQueueFilterMode}
+          />
 
           <HistoryPanel history={history} onRestore={restoreHistory} onRemove={removeHistory} onClear={clearHistory} />
         </section>
@@ -1303,6 +1340,11 @@ function formatTaskStageSummary(task) {
     return `${stageText} · ${safeProgress}%`;
   }
   return `任务进度 ${safeProgress}%`;
+}
+
+function normalizeQueueFilter(value) {
+  const mode = String(value || "").toLowerCase();
+  return QUEUE_FILTER_MODES[mode] ? mode : "all";
 }
 
 function SummaryChevron() {

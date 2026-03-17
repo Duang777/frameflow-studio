@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useMemo } from "react";
 import { formatTime } from "../lib/formatters";
 import { StatusBadge } from "./StatusBadge";
 
@@ -16,18 +16,24 @@ const TYPE_LABEL_MAP = {
   batch: "Batch",
 };
 
-export function TaskQueuePanel({ runs, onClear, onRemove }) {
-  const [filterMode, setFilterMode] = useState("all");
+const FILTER_OPTIONS = {
+  all: true,
+  running: true,
+  failed: true,
+};
+
+export function TaskQueuePanel({ runs, onClear, onRemove, filterMode = "all", onFilterChange }) {
+  const safeFilterMode = FILTER_OPTIONS[filterMode] ? filterMode : "all";
 
   const filteredRuns = useMemo(() => {
-    if (filterMode === "running") {
+    if (safeFilterMode === "running") {
       return runs.filter((run) => run.status === "running" || run.status === "pending");
     }
-    if (filterMode === "failed") {
+    if (safeFilterMode === "failed") {
       return runs.filter((run) => run.status === "error");
     }
     return runs;
-  }, [filterMode, runs]);
+  }, [safeFilterMode, runs]);
 
   const runningCount = useMemo(
     () => runs.filter((run) => run.status === "running" || run.status === "pending").length,
@@ -54,19 +60,19 @@ export function TaskQueuePanel({ runs, onClear, onRemove }) {
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <QueueFilterButton
-          active={filterMode === "all"}
+          active={safeFilterMode === "all"}
           label={`全部 ${runs.length}`}
-          onClick={() => setFilterMode("all")}
+          onClick={() => onFilterChange?.("all")}
         />
         <QueueFilterButton
-          active={filterMode === "running"}
+          active={safeFilterMode === "running"}
           label={`运行中 ${runningCount}`}
-          onClick={() => setFilterMode("running")}
+          onClick={() => onFilterChange?.("running")}
         />
         <QueueFilterButton
-          active={filterMode === "failed"}
+          active={safeFilterMode === "failed"}
           label={`失败 ${failedCount}`}
-          onClick={() => setFilterMode("failed")}
+          onClick={() => onFilterChange?.("failed")}
         />
       </div>
 
