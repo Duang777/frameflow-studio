@@ -40,10 +40,20 @@ app.post("/api/tasks/expand", async (req, res) => {
     type: "expand",
     payload: sanitizeTaskPayload(input),
     run: async (ctx) => {
-      ctx.setProgress(15);
-      const result = await generateOne(input);
+      ctx.setProgress(5);
+      ctx.setStage("queued", "排队中");
+      const result = await generateOne(input, {
+        onStage: (stage, stageText, progress) => {
+          if (ctx.isCancelled()) return;
+          if (typeof progress === "number") {
+            ctx.setProgress(progress);
+          }
+          ctx.setStage(stage, stageText);
+        },
+      });
       if (ctx.isCancelled()) return {};
-      ctx.setProgress(95);
+      ctx.setProgress(100);
+      ctx.setStage("completed", "完成");
       return result;
     },
   });
@@ -75,6 +85,8 @@ app.post("/api/tasks/batch-expand", async (req, res) => {
         imageDataUrl: "",
       };
       const results = [];
+      ctx.setProgress(5);
+      ctx.setStage("queued", "排队中");
 
       for (let index = 0; index < seeds.length; index += 1) {
         if (ctx.isCancelled()) {
@@ -83,16 +95,28 @@ app.post("/api/tasks/batch-expand", async (req, res) => {
 
         const seed = seeds[index];
         try {
-          const output = await generateOne({ ...shared, seedText: seed });
+          const output = await generateOne(
+            { ...shared, seedText: seed },
+            {
+              onStage: (stage, stageText, stageProgress) => {
+                const overall = calcBatchProgress(index, seeds.length, stageProgress);
+                ctx.setProgress(overall);
+                ctx.setStage(stage, `${stageText}（${index + 1}/${seeds.length}）`);
+              },
+            }
+          );
           results.push({ seed, expansions: output.expansions });
         } catch (error) {
           results.push({ seed, error: error.message || "生成失败" });
         }
 
-        const progress = Math.round(((index + 1) / seeds.length) * 100);
+        const progress = calcBatchProgress(index + 1, seeds.length, 0);
         ctx.setProgress(progress);
       }
 
+      if (!ctx.isCancelled()) {
+        ctx.setStage("completed", "完成");
+      }
       return { results };
     },
   });
@@ -196,7 +220,17 @@ function sanitizeTaskPayload(input) {
   };
 }
 
-async function generateOne(input) {
+function calcBatchProgress(completedSeeds, totalSeeds, innerProgress = 0) {
+  const total = Math.max(1, Number(totalSeeds) || 1);
+  const completed = Math.max(0, Number(completedSeeds) || 0);
+  const inner = Math.max(0, Math.min(100, Number(innerProgress) || 0)) / 100;
+  const value = ((completed + inner) / total) * 100;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+async function generateOne(input, options = {}) {
+  const onStage = typeof options?.onStage === "function" ? options.onStage : () => {};
+
   const seedText = String(input?.seedText || "").trim();
   const imageDataUrl = String(input?.imageDataUrl || "").trim();
   const styleBias = String(input?.styleBias || "cinematic");
@@ -212,6 +246,8 @@ async function generateOne(input) {
     error.statusCode = 400;
     throw error;
   }
+
+  onStage("validating", "校验输入", 12);
 
   const mode = getModeById(modeId);
   const styleHint = STYLE_HINTS[styleBias] || STYLE_HINTS.cinematic;
@@ -241,6 +277,7 @@ async function generateOne(input) {
   };
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  onStage("requesting_model", "请求模型", 38);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -267,6 +304,7 @@ async function generateOne(input) {
   }
 
   clearTimeout(timeout);
+  onStage("parsing_result", "解析结果", 76);
 
   const body = await response.json().catch(() => ({}));
 
@@ -288,6 +326,7 @@ async function generateOne(input) {
   const parsed = parseJsonText(text);
   const normalized = normalizeIdeas(parsed);
   const expansions = ensureIdeaCount(normalized, ideaCount, seedText);
+  onStage("completed", "完成", 100);
 
   return {
     expansions,

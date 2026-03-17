@@ -2,6 +2,7 @@
 import { StatusBadge } from "./StatusBadge";
 
 const TASK_STATUS_MAP = {
+  pending: { badgeState: "idle", badgeText: "Queued" },
   running: { badgeState: "loading", badgeText: "Running" },
   success: { badgeState: "success", badgeText: "Done" },
   error: { badgeState: "error", badgeText: "Failed" },

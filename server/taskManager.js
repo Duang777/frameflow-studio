@@ -9,6 +9,8 @@ export function createTask({ type, payload, run }) {
     type: String(type || "unknown"),
     status: "pending",
     progress: 0,
+    stage: "queued",
+    stageText: "排队中",
     payload: payload || {},
     result: null,
     error: "",
@@ -26,7 +28,7 @@ export function createTask({ type, payload, run }) {
       return;
     }
 
-    patchTask(id, { status: "running", progress: 5 });
+    patchTask(id, { status: "running", progress: 5, stage: "queued", stageText: "排队中" });
 
     try {
       const result = await run({
@@ -35,6 +37,12 @@ export function createTask({ type, payload, run }) {
         setProgress: (value) => {
           const progress = Math.max(0, Math.min(100, Number(value) || 0));
           patchTask(id, { progress });
+        },
+        setStage: (stage, stageText) => {
+          patchTask(id, {
+            stage: String(stage || "running"),
+            stageText: String(stageText || ""),
+          });
         },
         patch: (partial) => patchTask(id, partial),
         isCancelled: () => TASKS.get(id)?.status === "cancelled",
@@ -48,6 +56,8 @@ export function createTask({ type, payload, run }) {
       patchTask(id, {
         status: "success",
         progress: 100,
+        stage: "completed",
+        stageText: "完成",
         result: result || {},
         finishedAt: Date.now(),
       });
@@ -59,6 +69,8 @@ export function createTask({ type, payload, run }) {
 
       patchTask(id, {
         status: "error",
+        stage: "failed",
+        stageText: "失败",
         error: error?.message || "Task failed",
         finishedAt: Date.now(),
       });
@@ -85,6 +97,8 @@ export function cancelTask(taskId) {
 
   patchTask(taskId, {
     status: "cancelled",
+    stage: "cancelled",
+    stageText: "已取消",
     error: "Task cancelled by user",
     finishedAt: Date.now(),
   });
@@ -111,6 +125,8 @@ function sanitizeTask(task) {
     type: task.type,
     status: task.status,
     progress: task.progress,
+    stage: task.stage,
+    stageText: task.stageText,
     result: task.result,
     error: task.error,
     createdAt: task.createdAt,

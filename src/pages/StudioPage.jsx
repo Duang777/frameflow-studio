@@ -320,10 +320,12 @@ export default function StudioPage() {
 
       const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
         if (task.status === "running" || task.status === "pending") {
+          const stageSummary = formatTaskStageSummary(task);
           patchTaskRun(taskId, {
-            summary: `任务进度 ${task.progress}%`,
+            status: task.status,
+            summary: stageSummary,
           });
-          updateStatus("loading", "生成中", `任务进度 ${task.progress}%...`);
+          updateStatus("loading", "生成中", stageSummary);
         }
       });
 
@@ -469,10 +471,12 @@ export default function StudioPage() {
 
       const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
         if (task.status === "running" || task.status === "pending") {
+          const stageSummary = formatTaskStageSummary(task);
           patchTaskRun(taskId, {
-            summary: `任务进度 ${task.progress}%`,
+            status: task.status,
+            summary: stageSummary,
           });
-          updateStatus("loading", "再生成中", `任务进度 ${task.progress}%...`);
+          updateStatus("loading", "再生成中", stageSummary);
         }
       });
 
@@ -751,10 +755,12 @@ export default function StudioPage() {
 
       const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
         if (task.status === "running" || task.status === "pending") {
+          const stageSummary = formatTaskStageSummary(task);
           patchTaskRun(taskId, {
-            summary: `任务进度 ${task.progress}%`,
+            status: task.status,
+            summary: stageSummary,
           });
-          updateStatus("loading", "批量处理中", `任务进度 ${task.progress}%...`);
+          updateStatus("loading", "批量处理中", stageSummary);
         }
       });
 
@@ -1182,4 +1188,14 @@ function delay(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function formatTaskStageSummary(task) {
+  const stageText = String(task?.stageText || "").trim();
+  const progress = Number(task?.progress);
+  const safeProgress = Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 0;
+  if (stageText) {
+    return `${stageText} · ${safeProgress}%`;
+  }
+  return `任务进度 ${safeProgress}%`;
 }
