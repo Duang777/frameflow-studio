@@ -9,6 +9,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { buildIdeaCopyText, downloadText, formatTime, toIdeaMarkdown } from "../lib/formatters";
 import { DEFAULT_PROMPT_TEMPLATE, getModeById, STORYBOARD_MODES, STYLE_BIASES } from "../lib/modes";
 import { useLocalStorageState } from "../lib/storage";
+import { batchExpandStoryboard, expandStoryboard } from "../services/studioApi";
 
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const PLACEHOLDER_IMAGE =
@@ -25,6 +26,12 @@ const defaultSettings = {
   promptTemplate: DEFAULT_PROMPT_TEMPLATE,
 };
 
+const FILTER_MODES = [
+  { id: "all", label: "全部" },
+  { id: "favorites", label: "仅收藏" },
+  { id: "unstarred", label: "未收藏" },
+];
+
 export default function StudioPage() {
   const [settings, setSettings] = useLocalStorageState("atelier_settings_react", defaultSettings);
   const [history, setHistory] = useLocalStorageState("atelier_history_react", []);
@@ -38,6 +45,9 @@ export default function StudioPage() {
   const [batchText, setBatchText] = useState("");
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchResults, setBatchResults] = useState([]);
+  const [filterMode, setFilterMode] = useState("all");
+  const [selectedIdeaIndexes, setSelectedIdeaIndexes] = useState([]);
+  const [lastSelectedIndex, setLastSelectedIndex] = useState(null);
 
   const pendingRef = useRef(null);
   const formRef = useRef(null);
@@ -57,6 +67,30 @@ export default function StudioPage() {
     [batchText]
   );
 
+  const ideaEntries = useMemo(
+    () =>
+      ideas.map((idea, index) => ({
+        index,
+        idea,
+        favorite: Boolean(favorites[makeFavoriteKey(idea)]),
+      })),
+    [ideas, favorites]
+  );
+
+  const visibleEntries = useMemo(() => {
+    return ideaEntries.filter((entry) => {
+      if (filterMode === "favorites") return entry.favorite;
+      if (filterMode === "unstarred") return !entry.favorite;
+      return true;
+    });
+  }, [ideaEntries, filterMode]);
+
+  const visibleIndexes = useMemo(() => visibleEntries.map((entry) => entry.index), [visibleEntries]);
+  const selectedVisibleCount = useMemo(
+    () => selectedIdeaIndexes.filter((index) => visibleIndexes.includes(index)).length,
+    [selectedIdeaIndexes, visibleIndexes]
+  );
+
   useEffect(() => {
     const handler = (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -68,6 +102,83 @@ export default function StudioPage() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  useEffect(() => {
+    const max = ideas.length;
+    setSelectedIdeaIndexes((prev) => prev.filter((index) => index >= 0 && index < max));
+    setLastSelectedIndex((prev) => (typeof prev === "number" && prev < max ? prev : null));
+  }, [ideas.length]);
+
+  useEffect(() => {
+    const handler = async (event) => {
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      const withMeta = event.ctrlKey || event.metaKey;
+
+      if (withMeta && key === "a") {
+        event.preventDefault();
+        if (visibleIndexes.length === 0) return;
+        setSelectedIdeaIndexes([...visibleIndexes]);
+        setLastSelectedIndex(visibleIndexes[visibleIndexes.length - 1]);
+        updateStatus("success", "已全选", `已选中当前筛选结果中的 ${visibleIndexes.length} 条。`);
+        return;
+      }
+
+      if (withMeta && key === "c") {
+        if (selectedIdeaIndexes.length === 0) return;
+        event.preventDefault();
+        const selected = [...selectedIdeaIndexes]
+          .sort((a, b) => a - b)
+          .map((index) => ideas[index])
+          .filter(Boolean);
+        const text = selected.map((idea, idx) => buildIdeaCopyText(idea, idx)).join("\n\n");
+        try {
+          await navigator.clipboard.writeText(text);
+          updateStatus("success", "批量复制完成", `已复制 ${selected.length} 条分镜。`);
+        } catch {
+          updateStatus("error", "复制失败", "浏览器未授权剪贴板写入。");
+        }
+        return;
+      }
+
+      if (key === "escape") {
+        if (selectedIdeaIndexes.length === 0) return;
+        event.preventDefault();
+        setSelectedIdeaIndexes([]);
+        setLastSelectedIndex(null);
+        updateStatus("idle", "已清除选择", "当前没有选中分镜。");
+        return;
+      }
+
+      if (key === "backspace" || key === "delete") {
+        if (selectedIdeaIndexes.length === 0) return;
+        event.preventDefault();
+        setIdeas((prev) => prev.filter((_, index) => !selectedIdeaIndexes.includes(index)));
+        updateStatus("success", "批量删除完成", `已删除 ${selectedIdeaIndexes.length} 条分镜。`);
+        setSelectedIdeaIndexes([]);
+        setLastSelectedIndex(null);
+        return;
+      }
+
+      if (key === "arrowleft" || key === "arrowright") {
+        if (visibleIndexes.length === 0) return;
+        event.preventDefault();
+        const current = selectedIdeaIndexes.length > 0 ? selectedIdeaIndexes[selectedIdeaIndexes.length - 1] : visibleIndexes[0];
+        const currentPos = Math.max(0, visibleIndexes.indexOf(current));
+        const step = key === "arrowright" ? 1 : -1;
+        const nextPos = Math.max(0, Math.min(visibleIndexes.length - 1, currentPos + step));
+        const nextIndex = visibleIndexes[nextPos];
+        setSelectedIdeaIndexes([nextIndex]);
+        setLastSelectedIndex(nextIndex);
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [ideas, selectedIdeaIndexes, visibleIndexes]);
 
   const updateSettings = (patch) => {
     setSettings((prev) => ({ ...prev, ...patch }));
@@ -118,7 +229,7 @@ export default function StudioPage() {
     pendingRef.current = controller;
 
     try {
-      const payload = await callExpandApi(
+      const payload = await expandStoryboard(
         {
           seedText: settings.seedText.trim(),
           imageDataUrl: imageState.dataUrl,
@@ -135,6 +246,8 @@ export default function StudioPage() {
 
       const nextIdeas = payload.expansions || [];
       setIdeas(nextIdeas);
+      setSelectedIdeaIndexes([]);
+      setLastSelectedIndex(null);
       pushHistoryRecord(nextIdeas);
       updateStatus("success", "生成完成", `已生成 ${nextIdeas.length} 条分镜（${activeMode.name} / ${activeStyleLabel}）。`);
     } catch (error) {
@@ -212,7 +325,7 @@ export default function StudioPage() {
     pendingRef.current = controller;
 
     try {
-      const payload = await callExpandApi(
+      const payload = await expandStoryboard(
         {
           seedText: remixSeed,
           imageDataUrl: imageState.dataUrl,
@@ -248,7 +361,7 @@ export default function StudioPage() {
       return;
     }
 
-    const key = `${idea.title}__${idea.scene}`.slice(0, 260);
+    const key = makeFavoriteKey(idea);
     setFavorites((prev) => {
       const next = { ...prev };
       if (next[key]) {
@@ -305,6 +418,8 @@ export default function StudioPage() {
 
   const clearResults = () => {
     setIdeas([]);
+    setSelectedIdeaIndexes([]);
+    setLastSelectedIndex(null);
     updateStatus("idle", "已清空", "结果区已清空。");
   };
 
@@ -317,6 +432,8 @@ export default function StudioPage() {
     }
 
     setIdeas(item.ideas || []);
+    setSelectedIdeaIndexes([]);
+    setLastSelectedIndex(null);
     updateSettings({
       seedText: item.seedText || "",
       modeId: item.modeId || settings.modeId,
@@ -327,6 +444,106 @@ export default function StudioPage() {
   };
 
   const removeHistory = (id) => setHistory((prev) => prev.filter((item) => item.id !== id));
+
+  const toggleSelectIdea = (index, shouldRangeSelect = false) => {
+    if (shouldRangeSelect && typeof lastSelectedIndex === "number") {
+      const start = Math.min(lastSelectedIndex, index);
+      const end = Math.max(lastSelectedIndex, index);
+      const range = Array.from({ length: end - start + 1 }, (_, offset) => start + offset);
+      setSelectedIdeaIndexes((prev) => [...new Set([...prev, ...range])].sort((a, b) => a - b));
+      setLastSelectedIndex(index);
+      return;
+    }
+
+    setSelectedIdeaIndexes((prev) => {
+      if (prev.includes(index)) {
+        return prev.filter((item) => item !== index);
+      }
+      return [...prev, index].sort((a, b) => a - b);
+    });
+    setLastSelectedIndex(index);
+  };
+
+  const selectAllVisible = () => {
+    if (visibleIndexes.length === 0) {
+      updateStatus("error", "没有可选内容", "当前筛选结果为空。");
+      return;
+    }
+    setSelectedIdeaIndexes([...visibleIndexes]);
+    setLastSelectedIndex(visibleIndexes[visibleIndexes.length - 1]);
+    updateStatus("success", "已全选", `已选中当前筛选结果中的 ${visibleIndexes.length} 条。`);
+  };
+
+  const clearSelection = () => {
+    setSelectedIdeaIndexes([]);
+    setLastSelectedIndex(null);
+    updateStatus("idle", "已清除选择", "当前没有选中分镜。");
+  };
+
+  const batchCopySelected = async () => {
+    if (selectedIdeaIndexes.length === 0) {
+      updateStatus("error", "未选中分镜", "请先选择要复制的分镜卡片。");
+      return;
+    }
+
+    const selected = [...selectedIdeaIndexes]
+      .sort((a, b) => a - b)
+      .map((index) => ideas[index])
+      .filter(Boolean);
+
+    const text = selected.map((idea, idx) => buildIdeaCopyText(idea, idx)).join("\n\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      updateStatus("success", "批量复制完成", `已复制 ${selected.length} 条分镜。`);
+    } catch {
+      updateStatus("error", "复制失败", "浏览器未授权剪贴板写入。");
+    }
+  };
+
+  const batchDeleteSelected = () => {
+    if (selectedIdeaIndexes.length === 0) {
+      updateStatus("error", "未选中分镜", "请先选择要删除的分镜卡片。");
+      return;
+    }
+
+    const confirmed = window.confirm(`确定删除已选中的 ${selectedIdeaIndexes.length} 条分镜吗？`);
+    if (!confirmed) {
+      return;
+    }
+
+    setIdeas((prev) => prev.filter((_, index) => !selectedIdeaIndexes.includes(index)));
+    updateStatus("success", "批量删除完成", `已删除 ${selectedIdeaIndexes.length} 条分镜。`);
+    setSelectedIdeaIndexes([]);
+    setLastSelectedIndex(null);
+  };
+
+  const batchFavoriteSelected = (shouldFavorite) => {
+    if (selectedIdeaIndexes.length === 0) {
+      updateStatus("error", "未选中分镜", "请先选择分镜卡片。");
+      return;
+    }
+
+    setFavorites((prev) => {
+      const next = { ...prev };
+      selectedIdeaIndexes.forEach((index) => {
+        const idea = ideas[index];
+        if (!idea) return;
+        const key = makeFavoriteKey(idea);
+        if (shouldFavorite) {
+          next[key] = { savedAt: Date.now(), title: idea.title };
+        } else {
+          delete next[key];
+        }
+      });
+      return next;
+    });
+
+    updateStatus(
+      "success",
+      shouldFavorite ? "批量收藏完成" : "批量取消收藏",
+      `已处理 ${selectedIdeaIndexes.length} 条分镜。`
+    );
+  };
 
   const handleBatchRun = async () => {
     if (batchRunning) {
@@ -348,27 +565,18 @@ export default function StudioPage() {
     updateStatus("loading", "批量处理中", `正在处理 ${seeds.length} 条任务，请稍候...`);
 
     try {
-      const response = await fetch("/api/batch-expand", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          seeds,
-          modeId: settings.modeId,
-          styleBias: settings.styleBias,
-          ideaCount: Number(settings.ideaCount),
-          temperature: Number(settings.temperature),
-          topP: Number(settings.topP),
-          promptTemplate: settings.promptTemplate,
-          model: settings.model,
-        }),
+      const data = await batchExpandStoryboard({
+        seeds,
+        modeId: settings.modeId,
+        styleBias: settings.styleBias,
+        ideaCount: Number(settings.ideaCount),
+        temperature: Number(settings.temperature),
+        topP: Number(settings.topP),
+        promptTemplate: settings.promptTemplate,
+        model: settings.model,
       });
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "批量生成失败。");
-      }
-
-      const results = data.results || [];
+      const results = data?.results || [];
       setBatchResults(results);
       const successCount = results.filter((item) => !item.error).length;
 
@@ -604,11 +812,42 @@ export default function StudioPage() {
             </div>
           </section>
 
-          <div className="toolbar-shelf mt-4 flex flex-wrap gap-4">
+          <div className="toolbar-shelf mt-4 flex flex-wrap items-center gap-3">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-atelier-subtle">筛选</p>
+            {FILTER_MODES.map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                onClick={() => setFilterMode(mode.id)}
+                className={`border px-2 py-1 text-[10px] uppercase tracking-[0.18em] transition-colors duration-500 ${
+                  filterMode === mode.id
+                    ? "border-atelier-accent bg-atelier-accent text-atelier-inverse"
+                    : "border-atelier-fg/20 text-atelier-subtle hover:border-atelier-accent hover:text-atelier-accent"
+                }`}
+              >
+                {mode.label}
+              </button>
+            ))}
+            <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
+              可见 {visibleEntries.length}
+            </span>
+            <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
+              已选 {selectedVisibleCount}
+            </span>
+          </div>
+
+          <div className="toolbar-shelf mt-2 flex flex-wrap gap-4">
             <ToolbarButton onClick={copyAll} disabled={ideas.length === 0}>复制全部</ToolbarButton>
             <ToolbarButton onClick={exportMarkdown} disabled={ideas.length === 0}>导出 Markdown</ToolbarButton>
             <ToolbarButton onClick={exportJson} disabled={ideas.length === 0}>导出 JSON</ToolbarButton>
             <ToolbarButton onClick={clearResults} disabled={ideas.length === 0}>清空结果</ToolbarButton>
+            <span className="mx-1 h-4 w-px bg-atelier-fg/20" aria-hidden="true" />
+            <ToolbarButton onClick={selectAllVisible} disabled={visibleEntries.length === 0}>全选可见</ToolbarButton>
+            <ToolbarButton onClick={clearSelection} disabled={selectedIdeaIndexes.length === 0}>清除选择</ToolbarButton>
+            <ToolbarButton onClick={batchCopySelected} disabled={selectedIdeaIndexes.length === 0}>复制所选</ToolbarButton>
+            <ToolbarButton onClick={() => batchFavoriteSelected(true)} disabled={selectedIdeaIndexes.length === 0}>收藏所选</ToolbarButton>
+            <ToolbarButton onClick={() => batchFavoriteSelected(false)} disabled={selectedIdeaIndexes.length === 0}>取消收藏</ToolbarButton>
+            <ToolbarButton onClick={batchDeleteSelected} disabled={selectedIdeaIndexes.length === 0}>删除所选</ToolbarButton>
           </div>
 
           {loading ? (
@@ -627,19 +866,26 @@ export default function StudioPage() {
               <h3 className="font-display text-3xl font-normal">尚未生成</h3>
               <p className="mt-2 max-w-2xl text-sm text-atelier-subtle">从一个镜头起步，扩展成可拍摄、可重组、可继续写成完整分镜脚本的一组方向。</p>
             </section>
+          ) : visibleEntries.length === 0 ? (
+            <section className="result-empty mt-6">
+              <h3 className="font-display text-3xl font-normal">当前筛选无结果</h3>
+              <p className="mt-2 max-w-2xl text-sm text-atelier-subtle">可切回“全部”或调整收藏状态查看对应分镜。</p>
+            </section>
           ) : (
             <section className="mt-6 grid gap-5 md:grid-cols-2">
-              {ideas.map((idea, index) => {
-                const key = `${idea.title}__${idea.scene}`.slice(0, 260);
+              {visibleEntries.map(({ idea, index, favorite }) => {
+                const key = makeIdeaKey(idea, index);
                 return (
                   <IdeaCard
-                    key={`${key}-${index}`}
+                    key={key}
                     idea={idea}
                     index={index}
                     onCopy={copySingle}
                     onRemix={remixOne}
                     onFavorite={toggleFavorite}
-                    favorite={Boolean(favorites[key])}
+                    favorite={favorite}
+                    selected={selectedIdeaIndexes.includes(index)}
+                    onToggleSelect={(event) => toggleSelectIdea(index, event.shiftKey)}
                   />
                 );
               })}
@@ -690,22 +936,6 @@ function ToolbarButton({ children, onClick, disabled }) {
   );
 }
 
-async function callExpandApi(body, signal) {
-  const response = await fetch("/api/expand", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  });
-
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "请求失败");
-  }
-
-  return data;
-}
-
 function readAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -723,4 +953,19 @@ function formatFileStamp(date) {
   const hour = String(d.getHours()).padStart(2, "0");
   const minute = String(d.getMinutes()).padStart(2, "0");
   return `${year}${month}${day}-${hour}${minute}`;
+}
+
+function makeFavoriteKey(idea) {
+  return `${idea?.title || ""}__${idea?.scene || ""}`.slice(0, 260);
+}
+
+function makeIdeaKey(idea, index) {
+  return `${makeFavoriteKey(idea)}__${index}`;
+}
+
+function isEditableTarget(target) {
+  if (!(target instanceof Element)) return false;
+  const tag = target.tagName.toLowerCase();
+  if (target.getAttribute("contenteditable") === "true") return true;
+  return tag === "input" || tag === "textarea" || tag === "select";
 }

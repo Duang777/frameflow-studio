@@ -12,6 +12,8 @@
 - 单条生成：文本 + 图片输入，生成 6/8/10 条分镜
 - 单条再生成：对某条结果快速 remix
 - 收藏与历史：本地收藏、历史恢复、删除、清空
+- 结果区进阶交互：多选、范围选择（Shift）、批量复制/收藏/删除
+- 结果筛选：全部 / 仅收藏 / 未收藏
 - 导出：Markdown / JSON
 - 批量生成：每行一个 seed，后端顺序处理并回传每条结果
 - 后端代理：前端不再暴露 `GEMINI_API_KEY`
@@ -21,9 +23,11 @@
 - `src/`：React 前端
   - `components/`：UI 组件
   - `lib/`：模式、导出、存储等工具
+  - `services/`：API 客户端与业务接口封装
 - `server/`：Express API 代理
   - `index.js`：接口入口
   - `modes.js`：模式库与风格映射
+  - `response.js`：统一响应结构工具
   - `utils.js`：模型输出解析与补全
 
 ## 本地启动
@@ -66,6 +70,30 @@ npm run build
 - `GET /api/modes`：模式库列表
 - `POST /api/expand`：单条生成
 - `POST /api/batch-expand`：批量生成
+
+### 统一响应结构
+
+所有接口统一返回：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {}
+}
+```
+
+- 成功：`HTTP 200`，`code = 0`
+- 失败：`HTTP >= 400`，`code = HTTP 状态码`，错误信息在 `message`
+
+### 快捷键
+
+- `Ctrl/Cmd + Enter`：提交生成
+- `Ctrl/Cmd + A`：全选当前筛选结果
+- `Ctrl/Cmd + C`：复制当前所选
+- `Esc`：清除选择
+- `Delete / Backspace`：删除所选
+- `← / →`：在可见结果中切换选中项
 
 ### `/api/expand` 请求示例
 

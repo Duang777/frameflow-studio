@@ -1,6 +1,7 @@
 ﻿import cors from "cors";
 import dotenv from "dotenv";
 import express from "express";
+import { failure, success } from "./response.js";
 import { ensureIdeaCount, normalizeIdeas, parseJsonText } from "./utils.js";
 import { getModeById, STORYBOARD_MODES, STYLE_HINTS } from "./modes.js";
 
@@ -16,30 +17,31 @@ app.use(cors());
 app.use(express.json({ limit: "12mb" }));
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, hasApiKey: Boolean(GEMINI_API_KEY), defaultModel: DEFAULT_MODEL });
+  res.json(success({ ok: true, hasApiKey: Boolean(GEMINI_API_KEY), defaultModel: DEFAULT_MODEL }, "service healthy"));
 });
 
 app.get("/api/modes", (_req, res) => {
-  res.json({ modes: STORYBOARD_MODES });
+  res.json(success({ modes: STORYBOARD_MODES }, "modes fetched"));
 });
 
 app.post("/api/expand", async (req, res) => {
   if (!GEMINI_API_KEY) {
-    res.status(500).json({ error: "服务端未配置 GEMINI_API_KEY。请在 .env 中设置后重启。" });
+    res.status(500).json(failure("服务端未配置 GEMINI_API_KEY。请在 .env 中设置后重启。", 500));
     return;
   }
 
   try {
     const result = await generateOne(req.body);
-    res.json(result);
+    res.json(success(result, "expand completed"));
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.message || "生成失败" });
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json(failure(error.message || "生成失败", statusCode));
   }
 });
 
 app.post("/api/batch-expand", async (req, res) => {
   if (!GEMINI_API_KEY) {
-    res.status(500).json({ error: "服务端未配置 GEMINI_API_KEY。请在 .env 中设置后重启。" });
+    res.status(500).json(failure("服务端未配置 GEMINI_API_KEY。请在 .env 中设置后重启。", 500));
     return;
   }
 
@@ -48,7 +50,7 @@ app.post("/api/batch-expand", async (req, res) => {
     : [];
 
   if (seeds.length === 0) {
-    res.status(400).json({ error: "请提供至少一个有效 seed。" });
+    res.status(400).json(failure("请提供至少一个有效 seed。", 400));
     return;
   }
 
@@ -68,7 +70,12 @@ app.post("/api/batch-expand", async (req, res) => {
     }
   }
 
-  res.json({ results });
+  res.json(success({ results }, "batch expand completed"));
+});
+
+app.use((error, _req, res, _next) => {
+  const statusCode = error?.statusCode || 500;
+  res.status(statusCode).json(failure(error?.message || "服务器异常", statusCode));
 });
 
 app.listen(PORT, () => {
@@ -263,3 +270,4 @@ function sanitizeModel(value) {
   if (!model) return "";
   return model.slice(0, 100);
 }
+
