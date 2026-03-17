@@ -5,7 +5,13 @@
   onRun,
   running,
   batchResults,
+  onUseResult,
+  onCopySeed,
+  onCopyResult,
+  onExportResult,
 }) {
+  const successCount = batchResults.filter((item) => !item.error).length;
+
   return (
     <section className="module-block mt-0">
       <p className="eyebrow-label">Batch</p>
@@ -32,20 +38,76 @@
       />
 
       {batchResults.length > 0 && (
-        <div className="mt-4 grid gap-2">
-          {batchResults.map((result, index) => (
-            <article key={`${result.seed}-${index}`} className="card-luxe p-3" style={{ animationDelay: `${Math.min(index * 60, 360)}ms` }}>
-              <p className="text-[10px] uppercase tracking-[0.2em] text-atelier-subtle">任务 #{index + 1}</p>
-              <p className="mt-1 text-sm text-atelier-fg">{result.seed}</p>
-              {result.error ? (
-                <p className="mt-2 text-xs text-red-800">{result.error}</p>
-              ) : (
-                <p className="mt-2 text-xs text-atelier-subtle">已生成 {result.expansions?.length || 0} 条</p>
-              )}
-            </article>
-          ))}
+        <div className="mt-4">
+          <div className="flex flex-wrap items-center gap-2 border-b border-atelier-fg/15 pb-2">
+            <span className="text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">批量结果</span>
+            <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">总数 {batchResults.length}</span>
+            <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">成功 {successCount}</span>
+            <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">失败 {batchResults.length - successCount}</span>
+          </div>
+
+          <div className="mt-3 grid gap-3">
+            {batchResults.map((result, index) => {
+              const hasError = Boolean(result.error);
+              const expansions = Array.isArray(result.expansions) ? result.expansions : [];
+              const topTitle = expansions[0]?.title || "无结果";
+
+              return (
+                <article
+                  key={`${result.seed}-${index}`}
+                  className="group card-luxe relative p-3 md:p-4"
+                  style={{ animationDelay: `${Math.min(index * 60, 360)}ms` }}
+                >
+                  <div className="absolute inset-x-0 top-0 h-px bg-atelier-accent/45 opacity-0 transition-opacity duration-700 group-hover:opacity-100" />
+
+                  <div className="flex flex-wrap items-center gap-2 border-b border-atelier-fg/10 pb-2">
+                    <span className="text-[10px] uppercase tracking-[0.2em] text-atelier-subtle">任务 #{index + 1}</span>
+                    <span
+                      className={`border px-2 py-1 text-[10px] uppercase tracking-[0.18em] ${
+                        hasError
+                          ? "border-red-800/30 text-red-800"
+                          : "border-atelier-fg/15 text-atelier-subtle"
+                      }`}
+                    >
+                      {hasError ? "失败" : `成功 · ${expansions.length} 条`}
+                    </span>
+                  </div>
+
+                  <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-atelier-fg">{result.seed}</p>
+
+                  {hasError ? (
+                    <p className="mt-2 text-xs text-red-800">{result.error}</p>
+                  ) : (
+                    <div className="mt-2">
+                      <p className="text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">首条结果</p>
+                      <p className="mt-1 truncate text-sm text-atelier-fg">{topTitle}</p>
+                    </div>
+                  )}
+
+                  <div className="mt-3 flex flex-wrap gap-3 border-t border-atelier-fg/10 pt-2 opacity-85 transition-opacity duration-500 group-hover:opacity-100">
+                    <ActionButton onClick={() => onCopySeed?.(result.seed)}>复制 Seed</ActionButton>
+                    {!hasError && <ActionButton onClick={() => onUseResult?.(result, index)}>载入画布</ActionButton>}
+                    {!hasError && <ActionButton onClick={() => onCopyResult?.(result, index)}>复制结果</ActionButton>}
+                    {!hasError && <ActionButton onClick={() => onExportResult?.(result, index)}>导出</ActionButton>}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
         </div>
       )}
     </section>
+  );
+}
+
+function ActionButton({ children, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="underline-reveal text-[10px] uppercase tracking-[0.2em] text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent"
+    >
+      {children}
+    </button>
   );
 }

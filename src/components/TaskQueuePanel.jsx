@@ -1,4 +1,5 @@
-﻿import { formatTime } from "../lib/formatters";
+﻿import { useMemo, useState } from "react";
+import { formatTime } from "../lib/formatters";
 import { StatusBadge } from "./StatusBadge";
 
 const TASK_STATUS_MAP = {
@@ -16,6 +17,24 @@ const TYPE_LABEL_MAP = {
 };
 
 export function TaskQueuePanel({ runs, onClear, onRemove }) {
+  const [filterMode, setFilterMode] = useState("all");
+
+  const filteredRuns = useMemo(() => {
+    if (filterMode === "running") {
+      return runs.filter((run) => run.status === "running" || run.status === "pending");
+    }
+    if (filterMode === "failed") {
+      return runs.filter((run) => run.status === "error");
+    }
+    return runs;
+  }, [filterMode, runs]);
+
+  const runningCount = useMemo(
+    () => runs.filter((run) => run.status === "running" || run.status === "pending").length,
+    [runs]
+  );
+  const failedCount = useMemo(() => runs.filter((run) => run.status === "error").length, [runs]);
+
   return (
     <section className="module-block mt-6">
       <div className="flex items-center justify-between gap-3">
@@ -33,11 +52,31 @@ export function TaskQueuePanel({ runs, onClear, onRemove }) {
         </button>
       </div>
 
-      {runs.length === 0 ? (
-        <p className="mt-3 text-sm text-atelier-subtle">No tasks yet.</p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <QueueFilterButton
+          active={filterMode === "all"}
+          label={`全部 ${runs.length}`}
+          onClick={() => setFilterMode("all")}
+        />
+        <QueueFilterButton
+          active={filterMode === "running"}
+          label={`运行中 ${runningCount}`}
+          onClick={() => setFilterMode("running")}
+        />
+        <QueueFilterButton
+          active={filterMode === "failed"}
+          label={`失败 ${failedCount}`}
+          onClick={() => setFilterMode("failed")}
+        />
+      </div>
+
+      {filteredRuns.length === 0 ? (
+        <p className="mt-3 text-sm text-atelier-subtle">
+          {runs.length === 0 ? "No tasks yet." : "No tasks match the current filter."}
+        </p>
       ) : (
         <ul className="mt-4 grid gap-2">
-          {runs.map((run, idx) => {
+          {filteredRuns.map((run, idx) => {
             const statusMeta = TASK_STATUS_MAP[run.status] || {
               badgeState: "idle",
               badgeText: run.status || "Unknown",
@@ -61,8 +100,8 @@ export function TaskQueuePanel({ runs, onClear, onRemove }) {
                     {duration && <span className="text-xs text-atelier-subtle">Duration {duration}</span>}
                     <span className="text-xs text-atelier-subtle">{progress}%</span>
                   </div>
-                  <p className="mt-2 truncate text-sm text-atelier-fg">{run.title}</p>
                   {stageText && <p className="mt-1 text-xs text-atelier-subtle">{stageText}</p>}
+                  <p className="mt-1 truncate text-sm text-atelier-fg">{run.title}</p>
                   <div className="mt-2 h-1.5 w-full overflow-hidden border border-atelier-fg/10 bg-white/40">
                     <span
                       className="block h-full bg-atelier-accent transition-[width] duration-700 ease-out"
@@ -99,4 +138,20 @@ function normalizeProgress(input) {
   const value = Number(input);
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function QueueFilterButton({ active, label, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`border px-2 py-1 text-[10px] uppercase tracking-[0.18em] transition-colors duration-500 ${
+        active
+          ? "border-atelier-accent bg-atelier-accent text-atelier-inverse"
+          : "border-atelier-fg/20 text-atelier-subtle hover:border-atelier-accent hover:text-atelier-accent"
+      }`}
+    >
+      {label}
+    </button>
+  );
 }

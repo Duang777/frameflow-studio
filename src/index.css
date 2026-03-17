@@ -167,6 +167,52 @@ details[open] .details-chevron {
   color: #d4af37;
 }
 
+.editor-range {
+  appearance: none;
+  height: 8px;
+  border: 1px solid rgba(26, 26, 26, 0.16);
+  background:
+    linear-gradient(
+      to right,
+      rgba(212, 175, 55, 0.78) 0,
+      rgba(212, 175, 55, 0.78) var(--range-fill, 0%),
+      rgba(26, 26, 26, 0.08) var(--range-fill, 0%),
+      rgba(26, 26, 26, 0.08) 100%
+    );
+  transition: border-color 500ms ease-out, background 500ms ease-out;
+}
+
+.editor-range:hover {
+  border-color: rgba(26, 26, 26, 0.3);
+}
+
+.editor-range:focus-visible {
+  outline: none;
+  border-color: #d4af37;
+}
+
+.editor-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgba(26, 26, 26, 0.35);
+  background: #f9f8f6;
+  transition: transform 500ms ease-out, border-color 500ms ease-out;
+}
+
+.editor-range::-webkit-slider-thumb:hover {
+  transform: scale(1.08);
+  border-color: #d4af37;
+}
+
+.editor-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgba(26, 26, 26, 0.35);
+  background: #f9f8f6;
+  border-radius: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

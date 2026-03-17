@@ -6,6 +6,7 @@ import { HistoryPanel } from "../components/HistoryPanel";
 import { IdeaCard } from "../components/IdeaCard";
 import { ModeLibrary } from "../components/ModeLibrary";
 import { PrimaryButton } from "../components/PrimaryButton";
+import { RangeNumberField } from "../components/RangeNumberField";
 import { StatusBadge } from "../components/StatusBadge";
 import { TaskQueuePanel } from "../components/TaskQueuePanel";
 import { buildIdeaCopyText, downloadText, formatTime, toIdeaMarkdown } from "../lib/formatters";
@@ -751,6 +752,69 @@ export default function StudioPage() {
     );
   };
 
+  const copyBatchSeed = async (seed) => {
+    try {
+      await navigator.clipboard.writeText(String(seed || ""));
+      updateStatus("success", "Seed 已复制", "已复制批量任务 seed。");
+    } catch {
+      updateStatus("error", "复制失败", "浏览器未授权剪贴板写入。");
+    }
+  };
+
+  const useBatchResult = (result, index) => {
+    const expansions = Array.isArray(result?.expansions) ? result.expansions : [];
+    if (expansions.length === 0) {
+      updateStatus("error", "无可载入结果", "该批量任务没有可用分镜。");
+      return;
+    }
+
+    setIdeas(expansions);
+    setSelectedIdeaIndexes([]);
+    setLastSelectedIndex(null);
+    setFilterMode("all");
+    updateSettings({
+      seedText: String(result.seed || ""),
+    });
+    updateStatus("success", "已载入画布", `已将批量任务 #${index + 1} 的 ${expansions.length} 条结果载入主画布。`);
+  };
+
+  const copyBatchResult = async (result, index) => {
+    const expansions = Array.isArray(result?.expansions) ? result.expansions : [];
+    if (expansions.length === 0) {
+      updateStatus("error", "无可复制结果", "该批量任务没有可用分镜。");
+      return;
+    }
+
+    const text = expansions.map((idea, idx) => buildIdeaCopyText(idea, idx)).join("\n\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      updateStatus("success", "批量结果已复制", `已复制任务 #${index + 1} 的 ${expansions.length} 条结果。`);
+    } catch {
+      updateStatus("error", "复制失败", "浏览器未授权剪贴板写入。");
+    }
+  };
+
+  const exportBatchResult = (result, index) => {
+    const expansions = Array.isArray(result?.expansions) ? result.expansions : [];
+    if (expansions.length === 0) {
+      updateStatus("error", "无可导出结果", "该批量任务没有可用分镜。");
+      return;
+    }
+
+    const stamp = new Date();
+    const content = toIdeaMarkdown({
+      generatedAt: formatTime(stamp),
+      modeName: activeMode.name,
+      styleName: activeStyleLabel,
+      seedText: String(result.seed || ""),
+      imageName: "",
+      ideas: expansions,
+    });
+
+    downloadText(`batch-${index + 1}-${formatFileStamp(stamp)}.md`, content, "text/markdown;charset=utf-8");
+    updateStatus("success", "批量结果已导出", `已导出任务 #${index + 1}。`);
+  };
+
   const handleBatchRun = async () => {
     if (batchRunning) {
       return;
@@ -969,26 +1033,24 @@ export default function StudioPage() {
                 </FieldLabel>
 
                 <FieldLabel label="Temperature">
-                  <input
-                    type="number"
+                  <RangeNumberField
+                    value={settings.temperature}
                     min={0}
                     max={2}
                     step={0.1}
-                    value={settings.temperature}
-                    onChange={(event) => updateSettings({ temperature: Number(event.target.value) })}
-                    className="w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm outline-none transition-colors duration-500 focus:border-atelier-accent"
+                    onChange={(next) => updateSettings({ temperature: Number(next) })}
+                    formatValue={(next) => `温度 ${Number(next).toFixed(1)}`}
                   />
                 </FieldLabel>
 
                 <FieldLabel label="Top P">
-                  <input
-                    type="number"
+                  <RangeNumberField
+                    value={settings.topP}
                     min={0}
                     max={1}
                     step={0.05}
-                    value={settings.topP}
-                    onChange={(event) => updateSettings({ topP: Number(event.target.value) })}
-                    className="w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm outline-none transition-colors duration-500 focus:border-atelier-accent"
+                    onChange={(next) => updateSettings({ topP: Number(next) })}
+                    formatValue={(next) => `采样 ${Number(next).toFixed(2)}`}
                   />
                 </FieldLabel>
               </div>
@@ -1034,6 +1096,10 @@ export default function StudioPage() {
               onRun={handleBatchRun}
               running={batchRunning}
               batchResults={batchResults}
+              onUseResult={useBatchResult}
+              onCopySeed={copyBatchSeed}
+              onCopyResult={copyBatchResult}
+              onExportResult={exportBatchResult}
             />
           </form>
         </aside>
