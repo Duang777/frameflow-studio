@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import express from "express";
 import { failure, success } from "./response.js";
 import { cancelTask, createTask, getTask } from "./taskManager.js";
+import { clearHistory, getHistoryDbPath, listHistory, removeHistory, updateHistoryIdeas, upsertHistory } from "./historyStore.js";
 import { ensureIdeaCount, normalizeIdeas, parseJsonText } from "./utils.js";
 import { getModeById, STORYBOARD_MODES, STYLE_HINTS } from "./modes.js";
 
@@ -33,6 +34,7 @@ app.get("/api/health", (_req, res) => {
         hasApiKey: Boolean(GEMINI_API_KEY),
         defaultTextModel: DEFAULT_TEXT_MODEL,
         defaultImageModel: DEFAULT_IMAGE_MODEL,
+        historyDbPath: getHistoryDbPath(),
         endpointConfigured: Boolean(GEMINI_ENDPOINT),
         authMode: resolveAuthMode(GEMINI_API_KEY_MODE, GEMINI_ENDPOINT, GEMINI_API_KEY),
       },
@@ -43,6 +45,75 @@ app.get("/api/health", (_req, res) => {
 
 app.get("/api/modes", (_req, res) => {
   res.json(success({ modes: STORYBOARD_MODES }, "modes fetched"));
+});
+
+app.get("/api/history", (req, res) => {
+  const limit = Number(req.query?.limit) || 30;
+  const items = listHistory(limit);
+  res.json(success({ items }, "history fetched"));
+});
+
+app.post("/api/history", (req, res) => {
+  const body = req.body || {};
+  const ideas = Array.isArray(body?.ideas) ? body.ideas : [];
+  if (ideas.length === 0) {
+    res.status(400).json(failure("history ideas 不能为空。", 400));
+    return;
+  }
+
+  const saved = upsertHistory({
+    id: body.id,
+    createdAt: body.createdAt,
+    updatedAt: Date.now(),
+    seedText: body.seedText,
+    imageName: body.imageName,
+    modeId: body.modeId,
+    modeName: body.modeName,
+    styleBias: body.styleBias,
+    styleName: body.styleName,
+    ideas,
+  });
+  res.json(success({ item: saved }, "history saved"));
+});
+
+app.patch("/api/history/:id/ideas", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  const ideas = Array.isArray(req.body?.ideas) ? req.body.ideas : [];
+  if (!id) {
+    res.status(400).json(failure("history id 不能为空。", 400));
+    return;
+  }
+  if (ideas.length === 0) {
+    res.status(400).json(failure("ideas 不能为空。", 400));
+    return;
+  }
+
+  const ok = updateHistoryIdeas(id, ideas);
+  if (!ok) {
+    res.status(404).json(failure("历史记录不存在。", 404));
+    return;
+  }
+
+  res.json(success({ id, count: ideas.length }, "history ideas updated"));
+});
+
+app.delete("/api/history/:id", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) {
+    res.status(400).json(failure("history id 不能为空。", 400));
+    return;
+  }
+  const ok = removeHistory(id);
+  if (!ok) {
+    res.status(404).json(failure("历史记录不存在。", 404));
+    return;
+  }
+  res.json(success({ id }, "history removed"));
+});
+
+app.delete("/api/history", (_req, res) => {
+  clearHistory();
+  res.json(success({ ok: true }, "history cleared"));
 });
 
 app.post("/api/tasks/expand", async (req, res) => {

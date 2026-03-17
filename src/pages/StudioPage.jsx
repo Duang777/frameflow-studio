@@ -12,7 +12,18 @@ import { TaskQueuePanel } from "../components/TaskQueuePanel";
 import { buildIdeaCopyText, downloadText, formatTime, toIdeaMarkdown } from "../lib/formatters";
 import { DEFAULT_PROMPT_TEMPLATE, getModeById, STORYBOARD_MODES, STYLE_BIASES } from "../lib/modes";
 import { useLocalStorageState } from "../lib/storage";
-import { cancelTaskById, createBatchExpandTask, createExpandTask, createImageTask, getTaskStatus } from "../services/studioApi";
+import {
+  cancelTaskById,
+  clearHistoryEntries,
+  createBatchExpandTask,
+  createExpandTask,
+  createImageTask,
+  getHistory,
+  getTaskStatus,
+  removeHistoryEntry,
+  saveHistoryEntry,
+  updateHistoryEntryIdeas,
+} from "../services/studioApi";
 
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const PLACEHOLDER_IMAGE =
@@ -49,7 +60,7 @@ const QUEUE_FILTER_MODES = {
 export default function StudioPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [settings, setSettings] = useLocalStorageState("atelier_settings_react", defaultSettings);
-  const [history, setHistory] = useLocalStorageState("atelier_history_react", []);
+  const [history, setHistory] = useState([]);
   const [favorites, setFavorites] = useLocalStorageState("atelier_favorites_react", {});
   const [taskRuns, setTaskRuns] = useLocalStorageState("atelier_task_runs_react", []);
 
@@ -175,6 +186,27 @@ export default function StudioPage() {
 
     setSearchParams(nextParams, { replace: true });
   }, [queueFilterMode, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadHistory = async () => {
+      try {
+        const data = await getHistory(30);
+        if (!cancelled) {
+          setHistory(Array.isArray(data?.items) ? data.items : []);
+        }
+      } catch {
+        if (!cancelled) {
+          setHistory([]);
+        }
+      }
+    };
+
+    loadHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const handler = async (event) => {
@@ -498,7 +530,6 @@ export default function StudioPage() {
         summary: `生成完成，共 ${nextIdeas.length} 条。`,
         resultPayload: {
           kind: "ideas",
-          ideas: nextIdeas,
           historyId,
           modeId: settings.modeId,
           styleBias: settings.styleBias,
@@ -558,6 +589,10 @@ export default function StudioPage() {
           : item
       )
     );
+
+    updateHistoryEntryIdeas(activeHistoryId, nextIdeas).catch(() => {
+      // ignore transient persistence errors; local state remains usable
+    });
   };
 
   const pushHistoryRecord = (nextIdeas) => {
@@ -576,6 +611,9 @@ export default function StudioPage() {
 
     setHistory((prev) => [item, ...prev].slice(0, 30));
     setActiveHistoryId(item.id);
+    saveHistoryEntry(item).catch(() => {
+      // ignore transient persistence errors; local state remains usable
+    });
     return item.id;
   };
 
@@ -603,7 +641,8 @@ export default function StudioPage() {
     }
   };
 
-  const patchIdeaImageState = (index, patch) => {
+  const patchIdeaImageState = (index, patch, options = {}) => {
+    const shouldPersist = Boolean(options?.persistHistory);
     let nextIdeas = [];
     setIdeas((prev) => {
       nextIdeas = prev.map((idea, idx) => {
@@ -620,7 +659,7 @@ export default function StudioPage() {
       return nextIdeas;
     });
 
-    if (nextIdeas.length > 0) {
+    if (shouldPersist && nextIdeas.length > 0) {
       syncActiveHistoryIdeas(nextIdeas);
     }
     return nextIdeas;
@@ -711,12 +750,16 @@ export default function StudioPage() {
         throw new Error("模型未返回图片，请切换支持出图的模型后重试。");
       }
 
-      patchIdeaImageState(index, {
-        status: "success",
-        url: imageDataUrl,
-        error: "",
-        model: String(finalTask?.result?.model || imageModelValue),
-      });
+      patchIdeaImageState(
+        index,
+        {
+          status: "success",
+          url: imageDataUrl,
+          error: "",
+          model: String(finalTask?.result?.model || imageModelValue),
+        },
+        { persistHistory: true }
+      );
 
       finishTaskRun(taskId, {
         status: "success",
@@ -885,8 +928,14 @@ export default function StudioPage() {
         nextIdeas = prev.map((item, idx) => (idx === index ? replacement : item));
         return nextIdeas;
       });
+
+      let currentHistoryId = activeHistoryId;
       if (nextIdeas.length > 0) {
-        syncActiveHistoryIdeas(nextIdeas);
+        if (currentHistoryId) {
+          syncActiveHistoryIdeas(nextIdeas);
+        } else {
+          currentHistoryId = pushHistoryRecord(nextIdeas);
+        }
       }
       finishTaskRun(taskId, {
         status: "success",
@@ -895,8 +944,7 @@ export default function StudioPage() {
         summary: `第 ${index + 1} 条已更新。`,
         resultPayload: {
           kind: "ideas",
-          ideas: nextIdeas,
-          historyId: activeHistoryId,
+          historyId: currentHistoryId || null,
           modeId: settings.modeId,
           styleBias: settings.styleBias,
           seedText: settings.seedText,
@@ -987,9 +1035,14 @@ export default function StudioPage() {
     updateStatus("idle", "已清空", "结果区已清空。");
   };
 
-  const clearHistory = () => {
+  const clearHistory = async () => {
     setHistory([]);
     setActiveHistoryId(null);
+    try {
+      await clearHistoryEntries();
+    } catch {
+      updateStatus("error", "清空历史失败", "数据库写入失败，请稍后重试。");
+    }
   };
 
   const restoreHistory = (id) => {
@@ -1011,10 +1064,16 @@ export default function StudioPage() {
     updateStatus("success", "历史已恢复", `已恢复 ${formatTime(item.createdAt)} 的结果。`);
   };
 
-  const removeHistory = (id) => {
+  const removeHistory = async (id) => {
     setHistory((prev) => prev.filter((item) => item.id !== id));
     if (activeHistoryId === id) {
       setActiveHistoryId(null);
+    }
+
+    try {
+      await removeHistoryEntry(id);
+    } catch {
+      updateStatus("error", "删除历史失败", "数据库写入失败，请稍后重试。");
     }
   };
 
@@ -1276,6 +1335,11 @@ export default function StudioPage() {
 
       if (successHistory.length > 0) {
         setHistory((prev) => [...successHistory, ...prev].slice(0, 30));
+        successHistory.forEach((item) => {
+          saveHistoryEntry(item).catch(() => {
+            // ignore transient persistence errors; local state remains usable
+          });
+        });
       }
 
       finishTaskRun(taskId, {

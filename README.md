@@ -4,6 +4,7 @@
 
 - 前端：React + Tailwind（Luxury / Editorial 设计系统）
 - 后端：Express 代理 Gemini API（保护 API Key）
+- 历史持久化：服务端 SQLite（包含分镜图 data URL）
 - 模式库：广告片 / 剧情片 / 短视频 / B-roll
 - 批量工作流：多 seed 一次性生成
 
@@ -34,6 +35,7 @@
   - `services/`：API 客户端与业务接口封装
 - `server/`：Express API 代理
   - `index.js`：接口入口
+  - `historyStore.js`：SQLite 历史存储
   - `modes.js`：模式库与风格映射
   - `response.js`：统一响应结构工具
   - `taskManager.js`：内存任务管理（创建/查询/取消）
@@ -95,6 +97,11 @@ npm run build
 
 - `GET /api/health`：健康检查
 - `GET /api/modes`：模式库列表
+- `GET /api/history`：读取历史记录（SQLite）
+- `POST /api/history`：保存/覆盖一条历史记录
+- `PATCH /api/history/:id/ideas`：更新历史记录中的 ideas（含生成图）
+- `DELETE /api/history/:id`：删除一条历史记录
+- `DELETE /api/history`：清空历史记录
 - `POST /api/tasks/expand`：创建单条拓展任务（异步）
 - `POST /api/tasks/batch-expand`：创建批量拓展任务（异步）
 - `POST /api/tasks/generate-image`：创建单条分镜出图任务（异步）
