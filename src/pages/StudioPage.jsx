@@ -1,14 +1,13 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { BatchWorkflow } from "../components/BatchWorkflow";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { EditorialSelect } from "../components/EditorialSelect";
-import { HistoryPanel } from "../components/HistoryPanel";
 import { IdeaCard } from "../components/IdeaCard";
 import { ModeLibrary } from "../components/ModeLibrary";
 import { PrimaryButton } from "../components/PrimaryButton";
 import { RangeNumberField } from "../components/RangeNumberField";
 import { StatusBadge } from "../components/StatusBadge";
-import { TaskQueuePanel } from "../components/TaskQueuePanel";
+import { VideoComposerModal } from "../components/VideoComposerModal";
+import { WorkflowHubModal } from "../components/WorkflowHubModal";
 import { buildIdeaCopyText, downloadText, formatTime, toIdeaMarkdown } from "../lib/formatters";
 import { DEFAULT_PROMPT_TEMPLATE, getModeById, STORYBOARD_MODES, STYLE_BIASES } from "../lib/modes";
 import { useLocalStorageState } from "../lib/storage";
@@ -16,12 +15,32 @@ import {
   cancelTaskById,
   clearHistoryEntries,
   createBatchExpandTask,
+  createChapter,
+  deleteChapterSequenceVideo,
+  createProject,
   createExpandTask,
   createImageTask,
+  createVideoTask,
+  deleteChapter,
+  deleteProject,
+  getChapterShots,
+  getChapterSequenceVideos,
+  getChapters,
   getHistory,
+  getHistoryEntry,
+  getProjects,
   getTaskStatus,
+  getWorkspaceBootstrap,
   removeHistoryEntry,
+  replaceChapterShots,
+  saveChapterSequenceVideo,
   saveHistoryEntry,
+  updateChapter,
+  updateChapterShotImage,
+  updateChapterShotVideo,
+  updateProject,
+  updateHistoryEntryIdeaImage,
+  updateHistoryEntryIdeaVideo,
   updateHistoryEntryIdeas,
 } from "../services/studioApi";
 
@@ -34,12 +53,38 @@ const defaultSettings = {
   model: "gemini-2.5-flash-image",
   textModel: "gemini-2.5-flash-image",
   imageModel: "gemini-2.5-flash-image",
+  videoModel: "gemini-2.5-flash-image",
   styleBias: "cinematic",
   modeId: "ad-film",
   ideaCount: 8,
   temperature: 1,
   topP: 0.9,
   promptTemplate: DEFAULT_PROMPT_TEMPLATE,
+};
+
+const DEFAULT_SEQUENCE_PROMPT_TEMPLATE = `你是一名电影导演与剪辑师，请将以下分镜串联为一条连续视频。
+要求：
+1) 镜头之间环环相扣，时空和角色状态连续
+2) 镜头衔接自然，过渡方式优先使用 {{transitionStyle}}
+3) 输出一条完整视频，不要字幕、水印、Logo
+
+画幅：{{aspectRatio}}
+时长：约 {{durationSeconds}} 秒
+连贯性：{{continuityNote}}
+图像参与策略：{{referencePolicy}}
+分镜链路：
+{{shots}}
+`;
+
+const defaultVideoComposerSettings = {
+  title: "",
+  aspectRatio: "16:9",
+  durationSeconds: 6,
+  transitionStyle: "match-cut",
+  referenceImagePolicy: "all",
+  continuityNote: "主角形象、服装、方位和时间线保持一致。",
+  negativePrompt: "no subtitle, no watermark, no logo, no text overlay",
+  promptTemplate: DEFAULT_SEQUENCE_PROMPT_TEMPLATE,
 };
 
 const FILTER_MODES = [
@@ -51,13 +96,22 @@ const FILTER_MODES = [
 const MAX_TASK_RUNS = 20;
 const FINAL_TASK_STATUSES = ["success", "error", "cancelled"];
 const QUEUE_FILTER_QUERY_KEY = "queue";
+const WORKFLOW_HUB_TAB_QUERY_KEY = "hub";
 const QUEUE_FILTER_MODES = {
   all: true,
   running: true,
   failed: true,
 };
+const WORKFLOW_HUB_TABS = {
+  batch: true,
+  queue: true,
+  history: true,
+  advanced: true,
+};
 
 export default function StudioPage() {
+  const navigate = useNavigate();
+  const { projectId: routeProjectId = "", chapterId: routeChapterId = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const [settings, setSettings] = useLocalStorageState("atelier_settings_react", defaultSettings);
   const [history, setHistory] = useState([]);
@@ -73,16 +127,48 @@ export default function StudioPage() {
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchResults, setBatchResults] = useState([]);
   const [batchImageRunning, setBatchImageRunning] = useState(false);
+  const [videoComposerOpen, setVideoComposerOpen] = useState(false);
+  const [videoComposerShotIndexes, setVideoComposerShotIndexes] = useState([]);
+  const [sequenceVideoRunning, setSequenceVideoRunning] = useState(false);
+  const [videoComposerResult, setVideoComposerResult] = useState(null);
+  const [videoComposerSettings, setVideoComposerSettings] = useLocalStorageState(
+    "atelier_video_composer_settings_react",
+    defaultVideoComposerSettings
+  );
+  const [sequenceVideoHistory, setSequenceVideoHistory] = useState([]);
   const [filterMode, setFilterMode] = useState("all");
   const [activeHistoryId, setActiveHistoryId] = useState(null);
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  const [projectItems, setProjectItems] = useState([]);
+  const [chapterItems, setChapterItems] = useState([]);
+  const [activeProject, setActiveProject] = useState(null);
+  const [activeChapter, setActiveChapter] = useState(null);
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectDescription, setNewProjectDescription] = useState("");
+  const [renameProjectName, setRenameProjectName] = useState("");
+  const [renameProjectDescription, setRenameProjectDescription] = useState("");
+  const [newChapterTitle, setNewChapterTitle] = useState("");
+  const [renameChapterTitle, setRenameChapterTitle] = useState("");
+  const [pendingProjectDelete, setPendingProjectDelete] = useState(false);
+  const [pendingChapterDelete, setPendingChapterDelete] = useState(false);
+  const [workspaceModalOpen, setWorkspaceModalOpen] = useState(false);
+  const [workspaceModalTab, setWorkspaceModalTab] = useState("project");
+  const [workflowHubOpen, setWorkflowHubOpen] = useState(false);
   const [queueFilterMode, setQueueFilterMode] = useState(() =>
     normalizeQueueFilter(searchParams.get(QUEUE_FILTER_QUERY_KEY))
+  );
+  const [workflowHubTab, setWorkflowHubTab] = useState(() =>
+    normalizeWorkflowHubTab(searchParams.get(WORKFLOW_HUB_TAB_QUERY_KEY))
   );
   const [selectedIdeaIndexes, setSelectedIdeaIndexes] = useState([]);
   const [lastSelectedIndex, setLastSelectedIndex] = useState(null);
 
   const pendingRef = useRef(null);
   const formRef = useRef(null);
+  const resultsAnchorRef = useRef(null);
+  const activeHistoryIdRef = useRef(null);
+  const chapterShotLoadedRef = useRef(false);
 
   const activeMode = useMemo(() => getModeById(settings.modeId), [settings.modeId]);
   const activeStyleLabel = useMemo(
@@ -91,6 +177,10 @@ export default function StudioPage() {
   );
   const textModelValue = settings.textModel || settings.model || defaultSettings.textModel;
   const imageModelValue = settings.imageModel || settings.textModel || settings.model || defaultSettings.imageModel;
+  const videoModelValue =
+    settings.videoModel || settings.imageModel || settings.textModel || settings.model || defaultSettings.videoModel;
+  const currentProjectId = String(routeProjectId || "").trim();
+  const currentChapterId = String(routeChapterId || "").trim();
 
   const batchCount = useMemo(
     () =>
@@ -120,6 +210,24 @@ export default function StudioPage() {
     []
   );
 
+  const projectSelectOptions = useMemo(
+    () =>
+      projectItems.map((item) => ({
+        value: item.id,
+        label: formatProjectOptionLabel(item),
+      })),
+    [projectItems]
+  );
+
+  const chapterSelectOptions = useMemo(
+    () =>
+      chapterItems.map((item) => ({
+        value: item.id,
+        label: formatChapterOptionLabel(item),
+      })),
+    [chapterItems]
+  );
+
   const ideaEntries = useMemo(
     () =>
       ideas.map((idea, index) => ({
@@ -147,6 +255,274 @@ export default function StudioPage() {
     () => ideas.some((idea) => idea?.generatedImage?.status === "loading"),
     [ideas]
   );
+  const anyVideoLoading = useMemo(
+    () => ideas.some((idea) => idea?.generatedVideo?.status === "loading"),
+    [ideas]
+  );
+  const composerSelectedShots = useMemo(
+    () =>
+      videoComposerShotIndexes
+        .map((ideaIndex) => {
+          const idea = ideas[ideaIndex];
+          if (!idea || typeof idea !== "object") {
+            return null;
+          }
+          return {
+            ideaIndex,
+            ...idea,
+          };
+        })
+        .filter(Boolean),
+    [ideas, videoComposerShotIndexes]
+  );
+  const composerReferenceStats = useMemo(() => {
+    const policy = normalizeReferenceImagePolicyValue(videoComposerSettings?.referenceImagePolicy);
+    const policyApplied = applyReferencePolicyToSequenceIdeas(composerSelectedShots, policy);
+    return {
+      policy,
+      totalShots: composerSelectedShots.length,
+      availableImageCount: countSequenceReferenceImages(composerSelectedShots),
+      usedImageCount: countSequenceReferenceImages(policyApplied),
+    };
+  }, [composerSelectedShots, videoComposerSettings?.referenceImagePolicy]);
+
+  useEffect(() => {
+    chapterShotLoadedRef.current = false;
+  }, [currentProjectId, currentChapterId]);
+
+  useEffect(() => {
+    if (!currentProjectId || !currentChapterId) {
+      return;
+    }
+    // Prevent stale ideas from previous chapter while current chapter is loading.
+    setIdeas([]);
+    setSelectedIdeaIndexes([]);
+    setLastSelectedIndex(null);
+    setVideoComposerShotIndexes([]);
+    setVideoComposerResult(null);
+    setSequenceVideoHistory([]);
+    setVideoComposerOpen(false);
+    setFilterMode("all");
+  }, [currentChapterId, currentProjectId]);
+
+  useEffect(() => {
+    setPendingProjectDelete(false);
+    setPendingChapterDelete(false);
+  }, [currentProjectId, currentChapterId]);
+
+  useEffect(() => {
+    if (!workspaceModalOpen) {
+      return undefined;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        closeWorkspaceModal();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [workspaceModalOpen]);
+
+  useEffect(() => {
+    if (!workflowHubOpen) {
+      return undefined;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setWorkflowHubOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [workflowHubOpen]);
+
+  useEffect(() => {
+    if (!videoComposerOpen) {
+      return undefined;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setVideoComposerOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [videoComposerOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncWorkspace = async () => {
+      try {
+        if (!currentProjectId || !currentChapterId) {
+          const bootstrap = await getWorkspaceBootstrap();
+          if (cancelled) return;
+          const nextProjectId = String(bootstrap?.project?.id || "").trim();
+          const nextChapterId = String(bootstrap?.chapter?.id || "").trim();
+          if (nextProjectId && nextChapterId) {
+            setProjectItems(Array.isArray(bootstrap?.projects) ? bootstrap.projects : []);
+            setChapterItems(Array.isArray(bootstrap?.chapters) ? bootstrap.chapters : []);
+            setActiveProject(bootstrap?.project || null);
+            setActiveChapter(bootstrap?.chapter || null);
+            navigate(buildStudioPath(nextProjectId, nextChapterId), { replace: true });
+            return;
+          }
+        }
+
+        if (!currentProjectId || !currentChapterId) {
+          setWorkspaceLoading(false);
+          return;
+        }
+
+        const [projectsData, chaptersData] = await Promise.all([
+          getProjects(100),
+          getChapters(currentProjectId, 200),
+        ]);
+        if (cancelled) return;
+
+        const projects = Array.isArray(projectsData?.items) ? projectsData.items : [];
+        const chapters = Array.isArray(chaptersData?.items) ? chaptersData.items : [];
+        setProjectItems(projects);
+        setChapterItems(chapters);
+
+        const projectHit = projects.find((item) => item.id === currentProjectId) || null;
+        setActiveProject(projectHit);
+
+        let chapterHit = chapters.find((item) => item.id === currentChapterId) || null;
+        if (!chapterHit && chapters[0]) {
+          navigate(buildStudioPath(currentProjectId, chapters[0].id), { replace: true });
+          return;
+        }
+
+        if (!chapterHit && chapters.length === 0) {
+          const createData = await createChapter(currentProjectId, { title: "第 1 章" });
+          if (cancelled) return;
+          chapterHit = createData?.item || null;
+          if (chapterHit?.id) {
+            navigate(buildStudioPath(currentProjectId, chapterHit.id), { replace: true });
+            return;
+          }
+        }
+
+        setActiveChapter(chapterHit);
+      } catch {
+        // Keep studio usable even if workspace metadata request fails.
+      } finally {
+        if (!cancelled) {
+          setWorkspaceLoading(false);
+        }
+      }
+    };
+
+    setWorkspaceLoading(true);
+    syncWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentChapterId, currentProjectId, navigate]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadChapterIdeas = async () => {
+      if (!currentProjectId || !currentChapterId || chapterShotLoadedRef.current) {
+        return;
+      }
+
+      try {
+        const data = await getChapterShots(currentProjectId, currentChapterId);
+        if (cancelled) return;
+        chapterShotLoadedRef.current = true;
+        const chapterIdeas = Array.isArray(data?.ideas) ? data.ideas : [];
+        setIdeas(chapterIdeas);
+        setFilterMode("all");
+        setSelectedIdeaIndexes([]);
+        setLastSelectedIndex(null);
+        if (chapterIdeas.length > 0) {
+          updateStatus("success", "章节已加载", `已加载本章节 ${chapterIdeas.length} 条分镜。`);
+        } else {
+          updateStatus("idle", "章节为空", "当前章节暂无分镜，可以开始生成。");
+        }
+      } catch {
+        chapterShotLoadedRef.current = true;
+      }
+    };
+
+    loadChapterIdeas();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentChapterId, currentProjectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSequenceHistory = async () => {
+      if (!currentProjectId || !currentChapterId) {
+        if (!cancelled) {
+          setSequenceVideoHistory([]);
+          setVideoComposerResult(null);
+        }
+        return;
+      }
+
+      try {
+        const data = await getChapterSequenceVideos(currentProjectId, currentChapterId, 80);
+        if (cancelled) return;
+        const items = Array.isArray(data?.items) ? data.items : [];
+        setSequenceVideoHistory(items);
+        setVideoComposerResult((prev) => {
+          if (!prev?.id) {
+            return prev;
+          }
+          return items.find((item) => item.id === prev.id) || null;
+        });
+      } catch {
+        if (!cancelled) {
+          setSequenceVideoHistory([]);
+          setVideoComposerResult(null);
+        }
+      }
+    };
+
+    loadSequenceHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentChapterId, currentProjectId]);
+
+  useEffect(() => {
+    setRenameProjectName(String(activeProject?.name || ""));
+    setRenameProjectDescription(String(activeProject?.description || ""));
+  }, [activeProject?.id, activeProject?.name, activeProject?.description]);
+
+  useEffect(() => {
+    setRenameChapterTitle(String(activeChapter?.title || ""));
+  }, [activeChapter?.id, activeChapter?.title]);
 
   useEffect(() => {
     const handler = (event) => {
@@ -164,16 +540,20 @@ export default function StudioPage() {
     const max = ideas.length;
     setSelectedIdeaIndexes((prev) => prev.filter((index) => index >= 0 && index < max));
     setLastSelectedIndex((prev) => (typeof prev === "number" && prev < max ? prev : null));
+    setVideoComposerShotIndexes((prev) => prev.filter((index) => index >= 0 && index < max));
   }, [ideas.length]);
 
   useEffect(() => {
-    const nextMode = normalizeQueueFilter(searchParams.get(QUEUE_FILTER_QUERY_KEY));
-    setQueueFilterMode((prev) => (prev === nextMode ? prev : nextMode));
+    const nextQueueMode = normalizeQueueFilter(searchParams.get(QUEUE_FILTER_QUERY_KEY));
+    const nextHubTab = normalizeWorkflowHubTab(searchParams.get(WORKFLOW_HUB_TAB_QUERY_KEY));
+    setQueueFilterMode((prev) => (prev === nextQueueMode ? prev : nextQueueMode));
+    setWorkflowHubTab((prev) => (prev === nextHubTab ? prev : nextHubTab));
   }, [searchParams]);
 
   useEffect(() => {
     const currentMode = normalizeQueueFilter(searchParams.get(QUEUE_FILTER_QUERY_KEY));
-    if (currentMode === queueFilterMode) {
+    const currentHubTab = normalizeWorkflowHubTab(searchParams.get(WORKFLOW_HUB_TAB_QUERY_KEY));
+    if (currentMode === queueFilterMode && currentHubTab === workflowHubTab) {
       return;
     }
 
@@ -184,8 +564,14 @@ export default function StudioPage() {
       nextParams.set(QUEUE_FILTER_QUERY_KEY, queueFilterMode);
     }
 
+    if (workflowHubTab === "batch") {
+      nextParams.delete(WORKFLOW_HUB_TAB_QUERY_KEY);
+    } else {
+      nextParams.set(WORKFLOW_HUB_TAB_QUERY_KEY, workflowHubTab);
+    }
+
     setSearchParams(nextParams, { replace: true });
-  }, [queueFilterMode, searchParams, setSearchParams]);
+  }, [queueFilterMode, searchParams, setSearchParams, workflowHubTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,6 +593,10 @@ export default function StudioPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    activeHistoryIdRef.current = activeHistoryId;
+  }, [activeHistoryId]);
 
   useEffect(() => {
     const handler = async (event) => {
@@ -255,7 +645,13 @@ export default function StudioPage() {
       if (key === "backspace" || key === "delete") {
         if (selectedIdeaIndexes.length === 0) return;
         event.preventDefault();
-        setIdeas((prev) => prev.filter((_, index) => !selectedIdeaIndexes.includes(index)));
+        setIdeas((prev) => {
+          const nextIdeas = prev.filter((_, index) => !selectedIdeaIndexes.includes(index));
+          persistChapterIdeas(nextIdeas).catch(() => {
+            // non-blocking: keep UI responsive when persistence fails transiently
+          });
+          return nextIdeas;
+        });
         updateStatus("success", "批量删除完成", `已删除 ${selectedIdeaIndexes.length} 条分镜。`);
         setSelectedIdeaIndexes([]);
         setLastSelectedIndex(null);
@@ -284,8 +680,301 @@ export default function StudioPage() {
   };
 
   const updateStatus = (kind, badge, text) => setStatus({ kind, badge, text });
+  const closeWorkspaceModal = () => {
+    setWorkspaceModalOpen(false);
+    setPendingProjectDelete(false);
+    setPendingChapterDelete(false);
+  };
 
-  const startTaskRun = ({ type, title, summary }) => {
+  const persistChapterIdeas = async (nextIdeas) => {
+    if (!currentProjectId || !currentChapterId) {
+      return false;
+    }
+    const safeIdeas = Array.isArray(nextIdeas) ? nextIdeas : [];
+    try {
+      await replaceChapterShots(currentProjectId, currentChapterId, safeIdeas);
+      setChapterItems((prev) =>
+        prev.map((item) => (item.id === currentChapterId ? { ...item, shotCount: safeIdeas.length } : item))
+      );
+      setActiveChapter((prev) =>
+        prev?.id === currentChapterId ? { ...prev, shotCount: safeIdeas.length } : prev
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const persistChapterIdeaImage = async (ideaIndex, generatedImage) => {
+    if (!currentProjectId || !currentChapterId) {
+      return false;
+    }
+    const safeIdeaIndex = Number(ideaIndex);
+    if (!Number.isInteger(safeIdeaIndex) || safeIdeaIndex < 0) {
+      return false;
+    }
+    try {
+      await updateChapterShotImage(currentProjectId, currentChapterId, safeIdeaIndex, generatedImage);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const persistChapterIdeaVideo = async (ideaIndex, generatedVideo) => {
+    if (!currentProjectId || !currentChapterId) {
+      return false;
+    }
+    const safeIdeaIndex = Number(ideaIndex);
+    if (!Number.isInteger(safeIdeaIndex) || safeIdeaIndex < 0) {
+      return false;
+    }
+    try {
+      await updateChapterShotVideo(currentProjectId, currentChapterId, safeIdeaIndex, generatedVideo);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleSwitchProject = async (nextProjectId) => {
+    const safeProjectId = String(nextProjectId || "").trim();
+    if (!safeProjectId || safeProjectId === currentProjectId || workspaceBusy) {
+      return;
+    }
+
+    try {
+      setWorkspaceBusy(true);
+      const data = await getChapters(safeProjectId, 200);
+      const chapters = Array.isArray(data?.items) ? data.items : [];
+      let nextChapterId = String(chapters[0]?.id || "").trim();
+
+      if (!nextChapterId) {
+        const created = await createChapter(safeProjectId, { title: "第 1 章" });
+        nextChapterId = String(created?.item?.id || "").trim();
+      }
+
+      if (!nextChapterId) {
+        updateStatus("error", "切换项目失败", "未找到可进入的章节。");
+        return;
+      }
+
+      setPendingProjectDelete(false);
+      setPendingChapterDelete(false);
+      navigate(buildStudioPath(safeProjectId, nextChapterId));
+    } catch {
+      updateStatus("error", "切换项目失败", "读取项目章节失败，请稍后重试。");
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
+
+  const handleSwitchChapter = (nextChapterId) => {
+    const safeChapterId = String(nextChapterId || "").trim();
+    if (!currentProjectId || !safeChapterId || safeChapterId === currentChapterId || workspaceBusy) {
+      return;
+    }
+    setPendingChapterDelete(false);
+    navigate(buildStudioPath(currentProjectId, safeChapterId));
+  };
+
+  const handleCreateProject = async () => {
+    if (workspaceBusy) {
+      return;
+    }
+
+    try {
+      setWorkspaceBusy(true);
+      const defaultName = `项目 ${projectItems.length + 1}`;
+      const nextName = String(newProjectName || "").trim() || defaultName;
+      const nextDescription = String(newProjectDescription || "").trim();
+
+      const projectData = await createProject({
+        name: nextName,
+        description: nextDescription,
+      });
+      const nextProjectId = String(projectData?.item?.id || "").trim();
+      if (!nextProjectId) {
+        throw new Error("项目创建失败");
+      }
+
+      const chapterData = await createChapter(nextProjectId, { title: "第 1 章" });
+      const nextChapterId = String(chapterData?.item?.id || "").trim();
+      if (!nextChapterId) {
+        throw new Error("章节创建失败");
+      }
+
+      navigate(buildStudioPath(nextProjectId, nextChapterId));
+      setNewProjectName("");
+      setNewProjectDescription("");
+      setPendingProjectDelete(false);
+      updateStatus("success", "项目已创建", "已创建新项目并进入第 1 章。");
+    } catch {
+      updateStatus("error", "创建项目失败", "请稍后重试。");
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
+
+  const handleCreateChapter = async () => {
+    if (workspaceBusy) {
+      return;
+    }
+
+    if (!currentProjectId) {
+      updateStatus("error", "创建章节失败", "当前项目无效。");
+      return;
+    }
+
+    try {
+      setWorkspaceBusy(true);
+      const defaultTitle = `第 ${chapterItems.length + 1} 章`;
+      const nextTitle = String(newChapterTitle || "").trim() || defaultTitle;
+      const chapterData = await createChapter(currentProjectId, {
+        title: nextTitle,
+      });
+      const nextChapterId = String(chapterData?.item?.id || "").trim();
+      if (!nextChapterId) {
+        throw new Error("章节创建失败");
+      }
+      navigate(buildStudioPath(currentProjectId, nextChapterId));
+      setNewChapterTitle("");
+      setPendingChapterDelete(false);
+      updateStatus("success", "章节已创建", "已创建新章节并切换。");
+    } catch {
+      updateStatus("error", "创建章节失败", "请稍后重试。");
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
+
+  const handleRenameProject = async () => {
+    if (!currentProjectId || workspaceBusy) {
+      return;
+    }
+
+    const nextName = String(renameProjectName || "").trim();
+    if (!nextName) {
+      updateStatus("error", "项目重命名失败", "项目名称不能为空。");
+      return;
+    }
+
+    try {
+      setWorkspaceBusy(true);
+      const data = await updateProject(currentProjectId, {
+        name: nextName,
+        description: String(renameProjectDescription || "").trim(),
+      });
+      const updated = data?.item;
+      if (!updated?.id) {
+        throw new Error("项目更新失败");
+      }
+
+      setProjectItems((prev) => prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+      setActiveProject((prev) => (prev?.id === updated.id ? { ...prev, ...updated } : prev));
+      setPendingProjectDelete(false);
+      updateStatus("success", "项目已更新", "项目名称和简介已保存。");
+    } catch (error) {
+      updateStatus("error", "项目重命名失败", error?.message || "请稍后重试。");
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
+
+  const handleRenameChapter = async () => {
+    if (!currentProjectId || !currentChapterId || workspaceBusy) {
+      return;
+    }
+
+    const nextTitle = String(renameChapterTitle || "").trim();
+    if (!nextTitle) {
+      updateStatus("error", "章节重命名失败", "章节名称不能为空。");
+      return;
+    }
+
+    try {
+      setWorkspaceBusy(true);
+      const data = await updateChapter(currentProjectId, currentChapterId, {
+        title: nextTitle,
+      });
+      const updated = data?.item;
+      if (!updated?.id) {
+        throw new Error("章节更新失败");
+      }
+
+      setChapterItems((prev) => prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+      setActiveChapter((prev) => (prev?.id === updated.id ? { ...prev, ...updated } : prev));
+      setPendingChapterDelete(false);
+      updateStatus("success", "章节已更新", "章节名称已保存。");
+    } catch (error) {
+      updateStatus("error", "章节重命名失败", error?.message || "请稍后重试。");
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
+
+  const handleDeleteProject = async () => {
+    if (!currentProjectId || workspaceBusy) {
+      return;
+    }
+
+    if (!pendingProjectDelete) {
+      setPendingProjectDelete(true);
+      updateStatus("idle", "删除确认", "请再次点击“确认删除项目”以执行删除。");
+      return;
+    }
+
+    try {
+      setWorkspaceBusy(true);
+      const result = await deleteProject(currentProjectId);
+      const nextProjectId = String(result?.nextProject?.id || "").trim();
+      const nextChapterId = String(result?.nextChapter?.id || "").trim();
+      if (nextProjectId && nextChapterId) {
+        navigate(buildStudioPath(nextProjectId, nextChapterId), { replace: true });
+      } else {
+        navigate("/studio", { replace: true });
+      }
+      setPendingProjectDelete(false);
+      updateStatus("success", "项目已删除", "已切换到下一个可用项目。");
+    } catch (error) {
+      setPendingProjectDelete(false);
+      updateStatus("error", "删除项目失败", error?.message || "请稍后重试。");
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
+
+  const handleDeleteChapter = async () => {
+    if (!currentProjectId || !currentChapterId || workspaceBusy) {
+      return;
+    }
+
+    if (!pendingChapterDelete) {
+      setPendingChapterDelete(true);
+      updateStatus("idle", "删除确认", "请再次点击“确认删除章节”以执行删除。");
+      return;
+    }
+
+    try {
+      setWorkspaceBusy(true);
+      const result = await deleteChapter(currentProjectId, currentChapterId);
+      const nextChapterId = String(result?.nextChapter?.id || "").trim();
+      if (nextChapterId) {
+        navigate(buildStudioPath(currentProjectId, nextChapterId), { replace: true });
+      } else {
+        navigate("/studio", { replace: true });
+      }
+      setPendingChapterDelete(false);
+      updateStatus("success", "章节已删除", "已切换到下一个可用章节。");
+    } catch (error) {
+      setPendingChapterDelete(false);
+      updateStatus("error", "删除章节失败", error?.message || "请稍后重试。");
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
+
+  const startTaskRun = ({ type, title, summary, ...meta }) => {
     const id = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     const startedAt = Date.now();
     const item = {
@@ -299,6 +988,7 @@ export default function StudioPage() {
       startedAt,
       finishedAt: null,
       durationMs: null,
+      ...meta,
     };
     setTaskRuns((prev) => [item, ...prev].slice(0, MAX_TASK_RUNS));
     return id;
@@ -354,7 +1044,124 @@ export default function StudioPage() {
 
   const removeTaskRun = (id) => setTaskRuns((prev) => prev.filter((item) => item.id !== id));
   const clearTaskRuns = () => setTaskRuns([]);
-  const openTaskResult = (id) => {
+  const retryTaskRunFromQueue = async (id) => {
+    const safeId = String(id || "").trim();
+    if (!safeId) {
+      return;
+    }
+
+    const run = taskRuns.find((item) => item.id === safeId);
+    if (!run?.retryPayload) {
+      updateStatus("error", "无法重试", "该任务没有可重试参数。");
+      return;
+    }
+
+    if (run.retryPayload.kind === "video-sequence") {
+      await runSequenceVideoTask({
+        shotIndexes: Array.isArray(run.retryPayload.shotIndexes) ? run.retryPayload.shotIndexes : [],
+        configOverride: run.retryPayload.config,
+        baseRecordId: String(run.retryPayload.baseRecordId || "").trim(),
+      });
+      return;
+    }
+
+    updateStatus("error", "暂不支持", "当前仅支持串联视频任务重试。");
+  };
+
+  const resolveSourceMeta = (historyIdCandidate) => {
+    const historyId = String(historyIdCandidate || activeHistoryIdRef.current || "").trim();
+    const sourceRun = taskRuns.find(
+      (item) =>
+        item.type === "expand" &&
+        item.status === "success" &&
+        item?.resultPayload?.kind === "ideas" &&
+        String(item?.resultPayload?.historyId || "") === historyId
+    );
+
+    const sourceHistory = history.find((item) => item.id === historyId);
+    const sourceLabel = sourceRun
+      ? `${sourceRun.title} · ${formatTime(sourceRun.startedAt)}`
+      : sourceHistory
+      ? `${sourceHistory.modeName || "分镜"} · ${formatTime(sourceHistory.createdAt)}`
+      : `当前画布 · ${activeMode.name}`;
+
+    return {
+      historyId: historyId || null,
+      sourceLabel,
+      sourceRunId: sourceRun?.id || null,
+    };
+  };
+
+  const scrollToResults = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      resultsAnchorRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  };
+
+  const scrollToIdeaCard = (ideaIndex) => {
+    if (typeof document === "undefined") {
+      return;
+    }
+    const safeIdeaIndex = Number(ideaIndex);
+    if (!Number.isInteger(safeIdeaIndex) || safeIdeaIndex < 0) {
+      return;
+    }
+    window.setTimeout(() => {
+      const element = document.querySelector(`[data-idea-card-index="${safeIdeaIndex}"]`);
+      if (element instanceof HTMLElement) {
+        element.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }
+    }, 90);
+  };
+
+  const focusIdeaCard = (ideaIndex) => {
+    const safeIdeaIndex = Number(ideaIndex);
+    if (!Number.isInteger(safeIdeaIndex) || safeIdeaIndex < 0) {
+      return;
+    }
+    setFilterMode("all");
+    setSelectedIdeaIndexes([safeIdeaIndex]);
+    setLastSelectedIndex(safeIdeaIndex);
+    scrollToIdeaCard(safeIdeaIndex);
+  };
+
+  const resolveHistoryEntry = async (historyId) => {
+    const safeId = String(historyId || "").trim();
+    if (!safeId) {
+      return null;
+    }
+
+    const localHit = history.find((item) => item.id === safeId);
+    if (localHit) {
+      return localHit;
+    }
+
+    try {
+      const data = await getHistoryEntry(safeId);
+      const remoteItem = data?.item;
+      if (!remoteItem?.id) {
+        return null;
+      }
+      setHistory((prev) => {
+        const next = prev.filter((item) => item.id !== remoteItem.id);
+        return [remoteItem, ...next].slice(0, 30);
+      });
+      return remoteItem;
+    } catch {
+      return null;
+    }
+  };
+
+  const openTaskResult = async (id) => {
     const run = taskRuns.find((item) => item.id === id);
     if (!run) {
       updateStatus("error", "任务不存在", "找不到对应任务记录。");
@@ -369,9 +1176,12 @@ export default function StudioPage() {
 
     if (payload.kind === "ideas") {
       if (payload.historyId) {
-        const hit = history.find((item) => item.id === payload.historyId);
+        const hit = await resolveHistoryEntry(payload.historyId);
         if (hit) {
-          restoreHistory(hit.id);
+          restoreHistory(hit, {
+            badge: "任务结果已打开",
+            text: "已恢复该任务的分镜结果。",
+          });
           return;
         }
       }
@@ -387,11 +1197,16 @@ export default function StudioPage() {
       setLastSelectedIndex(null);
       setFilterMode("all");
       setActiveHistoryId(payload.historyId || null);
+      activeHistoryIdRef.current = payload.historyId || null;
+      persistChapterIdeas(nextIdeas).catch(() => {
+        // non-blocking: keep UI responsive when persistence fails transiently
+      });
       updateSettings({
         seedText: String(payload.seedText || settings.seedText || ""),
         modeId: String(payload.modeId || settings.modeId),
         styleBias: String(payload.styleBias || settings.styleBias),
       });
+      scrollToResults();
       updateStatus("success", "任务结果已打开", "已恢复该任务的分镜结果。");
       return;
     }
@@ -403,22 +1218,130 @@ export default function StudioPage() {
         return;
       }
       setBatchResults(results);
+      scrollToResults();
       updateStatus("success", "任务结果已打开", `已恢复批量结果，共 ${results.length} 条。`);
       return;
     }
 
     if (payload.kind === "image") {
+      const ideaIndex = Number(payload.ideaIndex);
       if (payload.historyId) {
-        const hit = history.find((item) => item.id === payload.historyId);
+        const hit = await resolveHistoryEntry(payload.historyId);
         if (hit) {
-          restoreHistory(hit.id);
-          updateStatus("success", "任务结果已打开", `已恢复分镜图任务：${payload.title || "分镜图"}`);
+          restoreHistory(hit, {
+            focusIdeaIndex: Number.isInteger(ideaIndex) ? ideaIndex : null,
+            badge: "任务结果已打开",
+            text: `已恢复分镜图任务：${payload.title || "分镜图"}`,
+          });
+          return;
+        }
+      }
+
+      if (Number.isInteger(ideaIndex) && ideaIndex >= 0) {
+        const image = ideas[ideaIndex]?.generatedImage;
+        if (image?.status === "success" && String(image?.url || "").trim()) {
+          focusIdeaCard(ideaIndex);
+          scrollToResults();
+          updateStatus("success", "任务结果已打开", `已定位到分镜图 #${ideaIndex + 1}。`);
           return;
         }
       }
 
       updateStatus("error", "无可打开结果", "该分镜图已不在当前画布，建议从“最近记录”恢复。");
       return;
+    }
+
+    if (payload.kind === "video") {
+      const ideaIndex = Number(payload.ideaIndex);
+      if (payload.historyId) {
+        const hit = await resolveHistoryEntry(payload.historyId);
+        if (hit) {
+          restoreHistory(hit, {
+            focusIdeaIndex: Number.isInteger(ideaIndex) ? ideaIndex : null,
+            badge: "任务结果已打开",
+            text: `已恢复分镜视频任务：${payload.title || "分镜视频"}`,
+          });
+          return;
+        }
+      }
+
+      if (Number.isInteger(ideaIndex) && ideaIndex >= 0) {
+        const video = ideas[ideaIndex]?.generatedVideo;
+        if (video?.status === "success" && String(video?.url || "").trim()) {
+          focusIdeaCard(ideaIndex);
+          scrollToResults();
+          updateStatus("success", "任务结果已打开", `已定位到分镜视频 #${ideaIndex + 1}。`);
+          return;
+        }
+      }
+
+      updateStatus("error", "无可打开结果", "该分镜视频已不在当前画布，建议从“最近记录”恢复。");
+      return;
+    }
+
+    if (payload.kind === "video-sequence") {
+      const sequenceId = String(payload.sequenceHistoryId || "").trim();
+      let historyItem = sequenceVideoHistory.find((item) => item.id === sequenceId);
+
+      if (!historyItem && sequenceId && currentProjectId && currentChapterId) {
+        try {
+          const remote = await getChapterSequenceVideos(currentProjectId, currentChapterId, 80);
+          const remoteItems = Array.isArray(remote?.items) ? remote.items : [];
+          if (remoteItems.length > 0) {
+            setSequenceVideoHistory(remoteItems);
+            historyItem = remoteItems.find((item) => item.id === sequenceId) || null;
+          }
+        } catch {
+          // keep fallback path for url-only task payload
+        }
+      }
+
+      if (historyItem) {
+        setVideoComposerShotIndexes(
+          Array.isArray(historyItem.shotIndexes)
+            ? historyItem.shotIndexes.filter((value) => Number.isInteger(value) && value >= 0 && value < ideas.length)
+            : []
+        );
+        setVideoComposerSettings((prev) => ({
+          ...prev,
+          ...(historyItem.config && typeof historyItem.config === "object" ? historyItem.config : {}),
+          referenceImagePolicy: normalizeReferenceImagePolicyValue(
+            historyItem?.config?.referenceImagePolicy || prev.referenceImagePolicy
+          ),
+        }));
+        setVideoComposerResult(historyItem);
+        setVideoComposerOpen(true);
+        updateStatus("success", "任务结果已打开", `已打开串联视频：${historyItem.title || "未命名视频"}`);
+        return;
+      }
+
+      const videoUrl = String(payload.videoUrl || "").trim();
+      if (videoUrl) {
+        const fallbackShotIndexes = Array.isArray(payload.shotIndexes)
+          ? payload.shotIndexes.filter((value) => Number.isInteger(value) && value >= 0 && value < ideas.length)
+          : [];
+        const fallbackItem = {
+          id: sequenceId || `seq-${Date.now()}`,
+          title: payload.title || "串联视频",
+          createdAt: Date.now(),
+          shotIndexes: fallbackShotIndexes,
+          generatedVideo: {
+            status: "success",
+            url: videoUrl,
+            error: "",
+            model: String(payload.model || videoModelValue),
+            mimeType: String(payload.mimeType || "video/mp4"),
+            prompt: String(payload.prompt || ""),
+            durationSeconds: Number(payload.durationSeconds) || 0,
+          },
+          config: { ...videoComposerSettings },
+        };
+        setVideoComposerShotIndexes(fallbackShotIndexes);
+        setVideoComposerResult(fallbackItem);
+        setVideoComposerOpen(true);
+        updateStatus("success", "任务结果已打开", "已打开串联视频结果。");
+        return;
+      }
     }
 
     updateStatus("error", "无可打开结果", "当前任务类型暂不支持打开。");
@@ -522,6 +1445,9 @@ export default function StudioPage() {
       setIdeas(nextIdeas);
       setSelectedIdeaIndexes([]);
       setLastSelectedIndex(null);
+      persistChapterIdeas(nextIdeas).catch(() => {
+        // non-blocking: keep UI responsive when persistence fails transiently
+      });
       const historyId = pushHistoryRecord(nextIdeas);
       finishTaskRun(taskId, {
         status: "success",
@@ -567,19 +1493,22 @@ export default function StudioPage() {
     updateStatus("idle", "已取消", "已发送取消请求，正在结束任务...");
     if (current.kind === "batch") {
       setBatchRunning(false);
+    } else if (current.kind === "video-sequence") {
+      setSequenceVideoRunning(false);
     } else {
       setLoading(false);
     }
   };
 
-  const syncActiveHistoryIdeas = (nextIdeas) => {
-    if (!activeHistoryId) {
+  const syncActiveHistoryIdeas = (nextIdeas, options = {}) => {
+    const historyId = String(options?.historyId || activeHistoryIdRef.current || "").trim();
+    if (!historyId) {
       return;
     }
 
     setHistory((prev) =>
       prev.map((item) =>
-        item.id === activeHistoryId
+        item.id === historyId
           ? {
               ...item,
               ideas: nextIdeas,
@@ -590,12 +1519,82 @@ export default function StudioPage() {
       )
     );
 
-    updateHistoryEntryIdeas(activeHistoryId, nextIdeas).catch(() => {
+    updateHistoryEntryIdeas(historyId, nextIdeas).catch(() => {
+      // ignore transient persistence errors; local state remains usable
+    });
+  };
+
+  const syncActiveHistoryIdeaImage = (historyId, index, generatedImage) => {
+    const safeHistoryId = String(historyId || "").trim();
+    const safeIdeaIndex = Number(index);
+    if (!safeHistoryId || !Number.isInteger(safeIdeaIndex) || safeIdeaIndex < 0) {
+      return;
+    }
+
+    setHistory((prev) =>
+      prev.map((item) => {
+        if (item.id !== safeHistoryId) return item;
+        const nextIdeas = Array.isArray(item.ideas)
+          ? item.ideas.map((entry, entryIndex) =>
+              entryIndex === safeIdeaIndex
+                ? {
+                    ...(entry && typeof entry === "object" ? entry : {}),
+                    generatedImage,
+                  }
+                : entry
+            )
+          : item.ideas;
+        return {
+          ...item,
+          ideas: nextIdeas,
+          updatedAt: Date.now(),
+        };
+      })
+    );
+
+    updateHistoryEntryIdeaImage(safeHistoryId, safeIdeaIndex, generatedImage).catch(() => {
+      // ignore transient persistence errors; local state remains usable
+    });
+  };
+
+  const syncActiveHistoryIdeaVideo = (historyId, index, generatedVideo) => {
+    const safeHistoryId = String(historyId || "").trim();
+    const safeIdeaIndex = Number(index);
+    if (!safeHistoryId || !Number.isInteger(safeIdeaIndex) || safeIdeaIndex < 0) {
+      return;
+    }
+
+    setHistory((prev) =>
+      prev.map((item) => {
+        if (item.id !== safeHistoryId) return item;
+        const nextIdeas = Array.isArray(item.ideas)
+          ? item.ideas.map((entry, entryIndex) =>
+              entryIndex === safeIdeaIndex
+                ? {
+                    ...(entry && typeof entry === "object" ? entry : {}),
+                    generatedVideo,
+                  }
+                : entry
+            )
+          : item.ideas;
+        return {
+          ...item,
+          ideas: nextIdeas,
+          updatedAt: Date.now(),
+        };
+      })
+    );
+
+    updateHistoryEntryIdeaVideo(safeHistoryId, safeIdeaIndex, generatedVideo).catch(() => {
       // ignore transient persistence errors; local state remains usable
     });
   };
 
   const pushHistoryRecord = (nextIdeas) => {
+    const safeIdeas = Array.isArray(nextIdeas) ? nextIdeas : [];
+    if (safeIdeas.length === 0) {
+      return null;
+    }
     const item = {
       id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
       createdAt: Date.now(),
@@ -605,16 +1604,28 @@ export default function StudioPage() {
       modeName: activeMode.name,
       styleBias: settings.styleBias,
       styleName: activeStyleLabel,
-      count: nextIdeas.length,
-      ideas: nextIdeas,
+      count: safeIdeas.length,
+      ideas: safeIdeas,
     };
 
     setHistory((prev) => [item, ...prev].slice(0, 30));
     setActiveHistoryId(item.id);
+    activeHistoryIdRef.current = item.id;
     saveHistoryEntry(item).catch(() => {
       // ignore transient persistence errors; local state remains usable
     });
     return item.id;
+  };
+
+  const ensureActiveHistoryRecord = (ideasSnapshot = ideas) => {
+    if (activeHistoryIdRef.current) {
+      return activeHistoryIdRef.current;
+    }
+    const safeIdeas = Array.isArray(ideasSnapshot) ? ideasSnapshot : [];
+    if (safeIdeas.length === 0) {
+      return null;
+    }
+    return pushHistoryRecord(safeIdeas);
   };
 
   const copyAll = async () => {
@@ -643,6 +1654,7 @@ export default function StudioPage() {
 
   const patchIdeaImageState = (index, patch, options = {}) => {
     const shouldPersist = Boolean(options?.persistHistory);
+    const historyId = String(options?.historyId || activeHistoryIdRef.current || "").trim();
     let nextIdeas = [];
     setIdeas((prev) => {
       nextIdeas = prev.map((idea, idx) => {
@@ -659,8 +1671,41 @@ export default function StudioPage() {
       return nextIdeas;
     });
 
-    if (shouldPersist && nextIdeas.length > 0) {
-      syncActiveHistoryIdeas(nextIdeas);
+    if (shouldPersist && nextIdeas.length > 0 && historyId) {
+      syncActiveHistoryIdeas(nextIdeas, { historyId });
+    }
+    return nextIdeas;
+  };
+
+  const patchIdeaVideoState = (index, patch, options = {}) => {
+    const shouldPersist = Boolean(options?.persistHistory);
+    const historyId = String(options?.historyId || activeHistoryIdRef.current || "").trim();
+    let nextIdeas = [];
+    setIdeas((prev) => {
+      nextIdeas = prev.map((idea, idx) => {
+        if (idx !== index) return idea;
+        const prevVideo = idea?.generatedVideo || {
+          status: "idle",
+          url: "",
+          error: "",
+          model: "",
+          mimeType: "",
+          prompt: "",
+          durationSeconds: 0,
+        };
+        return {
+          ...idea,
+          generatedVideo: {
+            ...prevVideo,
+            ...patch,
+          },
+        };
+      });
+      return nextIdeas;
+    });
+
+    if (shouldPersist && nextIdeas.length > 0 && historyId) {
+      syncActiveHistoryIdeas(nextIdeas, { historyId });
     }
     return nextIdeas;
   };
@@ -675,10 +1720,16 @@ export default function StudioPage() {
       return false;
     }
 
+    const persistedHistoryId = ensureActiveHistoryRecord(ideas);
+    const sourceMeta = resolveSourceMeta(persistedHistoryId);
+
     const taskId = startTaskRun({
       type: "image",
       title: `分镜图 #${index + 1}`,
       summary: `${idea.title || "分镜出图"} · ${imageModelValue}`,
+      sourceKey: sourceMeta.historyId ? `history:${sourceMeta.historyId}` : `canvas:${settings.modeId}`,
+      sourceLabel: sourceMeta.sourceLabel,
+      sourceRunId: sourceMeta.sourceRunId,
     });
 
     patchIdeaImageState(index, {
@@ -750,16 +1801,20 @@ export default function StudioPage() {
         throw new Error("模型未返回图片，请切换支持出图的模型后重试。");
       }
 
-      patchIdeaImageState(
-        index,
-        {
-          status: "success",
-          url: imageDataUrl,
-          error: "",
-          model: String(finalTask?.result?.model || imageModelValue),
-        },
-        { persistHistory: true }
-      );
+      const generatedImage = {
+        status: "success",
+        url: imageDataUrl,
+        error: "",
+        model: String(finalTask?.result?.model || imageModelValue),
+      };
+
+      patchIdeaImageState(index, generatedImage);
+      if (persistedHistoryId) {
+        syncActiveHistoryIdeaImage(persistedHistoryId, index, generatedImage);
+      }
+      persistChapterIdeaImage(index, generatedImage).catch(() => {
+        // non-blocking: keep UI responsive when persistence fails transiently
+      });
 
       finishTaskRun(taskId, {
         status: "success",
@@ -768,7 +1823,7 @@ export default function StudioPage() {
         summary: `第 ${index + 1} 条分镜图已生成。`,
         resultPayload: {
           kind: "image",
-          historyId: activeHistoryId,
+          historyId: persistedHistoryId || activeHistoryIdRef.current || null,
           ideaIndex: index,
           ideaKey: makeFavoriteKey(ideaPayload),
           title: ideaPayload.title || `#${index + 1}`,
@@ -846,6 +1901,560 @@ export default function StudioPage() {
 
     setBatchImageRunning(false);
     updateStatus("success", "批量出图完成", `已处理 ${targets.length} 条，成功 ${successCount} 条。`);
+  };
+
+  const generateIdeaVideo = async (index) => {
+    const idea = ideas[index];
+    if (!idea) {
+      return false;
+    }
+
+    if (idea?.generatedVideo?.status === "loading") {
+      return false;
+    }
+
+    const persistedHistoryId = ensureActiveHistoryRecord(ideas);
+    const sourceMeta = resolveSourceMeta(persistedHistoryId);
+
+    const taskId = startTaskRun({
+      type: "video",
+      title: `分镜视频 #${index + 1}`,
+      summary: `${idea.title || "分镜视频"} · ${videoModelValue}`,
+      sourceKey: sourceMeta.historyId ? `history:${sourceMeta.historyId}` : `canvas:${settings.modeId}`,
+      sourceLabel: sourceMeta.sourceLabel,
+      sourceRunId: sourceMeta.sourceRunId,
+    });
+
+    patchIdeaVideoState(index, {
+      status: "loading",
+      error: "",
+    });
+    updateStatus("loading", "视频生成中", `正在生成第 ${index + 1} 条分镜视频...`);
+    let backendTaskId = "";
+
+    try {
+      const ideaPayload = {
+        title: idea.title,
+        scene: idea.scene,
+        camera: idea.camera,
+        mood: idea.mood,
+        twist: idea.twist,
+        seedIdea: idea.seedIdea,
+      };
+
+      const createResult = await createVideoTask({
+        idea: ideaPayload,
+        seedText: settings.seedText,
+        modeId: settings.modeId,
+        styleBias: settings.styleBias,
+        videoModel: videoModelValue,
+        imageDataUrl: String(idea?.generatedImage?.url || ""),
+      });
+
+      backendTaskId = createResult?.task?.id || "";
+      if (!backendTaskId) {
+        throw new Error("任务创建失败，请重试。");
+      }
+
+      pendingRef.current = { taskId: backendTaskId, kind: "video" };
+
+      const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
+        if (task.status === "running" || task.status === "pending") {
+          const stageSummary = formatTaskStageSummary(task);
+          patchTaskRun(taskId, {
+            status: task.status,
+            progress: Number(task.progress) || 0,
+            stageText: String(task.stageText || ""),
+            summary: stageSummary,
+          });
+          updateStatus("loading", "视频生成中", stageSummary);
+        }
+      });
+
+      if (finalTask.status === "cancelled") {
+        finishTaskRun(taskId, {
+          status: "cancelled",
+          progress: Number(finalTask.progress) || 0,
+          stageText: String(finalTask.stageText || "已取消"),
+          summary: "请求已取消。",
+        });
+        patchIdeaVideoState(index, {
+          status: "idle",
+          error: "",
+        });
+        updateStatus("idle", "已取消", "视频任务已取消。");
+        return false;
+      }
+
+      if (finalTask.status !== "success") {
+        throw new Error(finalTask.error || "视频生成失败，请稍后重试。");
+      }
+
+      const videoUrl = String(finalTask?.result?.videoUrl || "");
+      if (!videoUrl) {
+        throw new Error("模型未返回视频，请切换支持视频生成的模型后重试。");
+      }
+
+      const generatedVideo = {
+        status: "success",
+        url: videoUrl,
+        error: "",
+        model: String(finalTask?.result?.model || videoModelValue),
+        mimeType: String(finalTask?.result?.mimeType || "video/mp4"),
+        prompt: String(finalTask?.result?.prompt || ""),
+        durationSeconds: Number(finalTask?.result?.durationSeconds) || 0,
+      };
+
+      patchIdeaVideoState(index, generatedVideo);
+      if (persistedHistoryId) {
+        syncActiveHistoryIdeaVideo(persistedHistoryId, index, generatedVideo);
+      }
+      persistChapterIdeaVideo(index, generatedVideo).catch(() => {
+        // non-blocking: keep UI responsive when persistence fails transiently
+      });
+
+      finishTaskRun(taskId, {
+        status: "success",
+        progress: 100,
+        stageText: String(finalTask.stageText || "完成"),
+        summary: `第 ${index + 1} 条分镜视频已生成。`,
+        resultPayload: {
+          kind: "video",
+          historyId: persistedHistoryId || activeHistoryIdRef.current || null,
+          ideaIndex: index,
+          ideaKey: makeFavoriteKey(ideaPayload),
+          title: ideaPayload.title || `#${index + 1}`,
+        },
+      });
+      updateStatus("success", "视频生成完成", `第 ${index + 1} 条分镜视频已生成。`);
+      return true;
+    } catch (error) {
+      const message = error?.message || "视频生成失败，请稍后重试。";
+      patchIdeaVideoState(index, {
+        status: "error",
+        error: message,
+      });
+      finishTaskRun(taskId, {
+        status: "error",
+        stageText: "失败",
+        summary: message,
+      });
+      updateStatus("error", "视频生成失败", message);
+      return false;
+    } finally {
+      if (pendingRef.current?.taskId === backendTaskId) {
+        pendingRef.current = null;
+      }
+    }
+  };
+
+  const downloadIdeaVideo = async (index) => {
+    const idea = ideas[index];
+    const videoUrl = String(idea?.generatedVideo?.url || "");
+    if (!isRenderableVideoUrl(videoUrl)) {
+      updateStatus("error", "无可下载视频", "请先生成分镜视频。");
+      return;
+    }
+
+    const stamp = formatFileStamp(new Date());
+    const safeTitle = String(idea?.title || `motion-${index + 1}`)
+      .replace(/[\\/:*?"<>|]/g, "-")
+      .replace(/\s+/g, "-")
+      .slice(0, 40);
+    const extension = inferVideoExtension(idea?.generatedVideo?.mimeType, videoUrl);
+    const filename = `${safeTitle || `motion-${index + 1}`}-${stamp}.${extension}`;
+    try {
+      await triggerDownloadFromUrl(filename, videoUrl);
+      updateStatus("success", "视频已导出", `第 ${index + 1} 条分镜视频已下载。`);
+    } catch {
+      updateStatus("error", "下载失败", "视频下载失败，请稍后重试。");
+    }
+  };
+
+  const syncComposerShotsFromSelection = () => {
+    const next = [...selectedIdeaIndexes]
+      .filter((index) => index >= 0 && index < ideas.length)
+      .sort((a, b) => a - b);
+    setVideoComposerShotIndexes(next);
+    return next;
+  };
+
+  const openVideoComposer = () => {
+    const next = syncComposerShotsFromSelection();
+    if (next.length < 2) {
+      updateStatus("error", "未选中分镜", "请先在画布中选择至少 2 条分镜，再打开串联成片。");
+      return;
+    }
+    setVideoComposerOpen(true);
+  };
+
+  const clearComposerSelection = () => {
+    setVideoComposerShotIndexes([]);
+  };
+
+  const removeComposerShot = (position) => {
+    setVideoComposerShotIndexes((prev) => prev.filter((_, idx) => idx !== position));
+  };
+
+  const moveComposerShot = (position, direction) => {
+    const step = Number(direction);
+    if (!Number.isInteger(position) || !Number.isInteger(step) || step === 0) {
+      return;
+    }
+    setVideoComposerShotIndexes((prev) => {
+      const from = position;
+      const to = position + step;
+      if (from < 0 || from >= prev.length || to < 0 || to >= prev.length) {
+        return prev;
+      }
+      const next = [...prev];
+      const temp = next[from];
+      next[from] = next[to];
+      next[to] = temp;
+      return next;
+    });
+  };
+
+  const restoreComposerOriginalOrder = () => {
+    setVideoComposerShotIndexes((prev) => [...prev].sort((a, b) => a - b));
+  };
+
+  const updateVideoComposerConfig = (patch) => {
+    setVideoComposerSettings((prev) => {
+      const merged = {
+        ...prev,
+        ...(patch && typeof patch === "object" ? patch : {}),
+      };
+      const nextDuration = Number(merged.durationSeconds);
+      merged.durationSeconds = Number.isFinite(nextDuration)
+        ? Math.max(2, Math.min(12, Math.round(nextDuration)))
+        : defaultVideoComposerSettings.durationSeconds;
+      merged.referenceImagePolicy = normalizeReferenceImagePolicyValue(merged.referenceImagePolicy);
+      return merged;
+    });
+  };
+
+  const runSequenceVideoTask = async ({ shotIndexes, configOverride = null, baseRecordId = "" }) => {
+    const normalizedIndexes = Array.isArray(shotIndexes)
+      ? shotIndexes.filter((index) => Number.isInteger(index) && index >= 0 && index < ideas.length)
+      : [];
+    if (normalizedIndexes.length < 2) {
+      updateStatus("error", "镜头数量不足", "至少需要 2 条分镜才能生成串联视频。");
+      return false;
+    }
+
+    if (sequenceVideoRunning) {
+      return false;
+    }
+
+    const usedConfig = {
+      ...videoComposerSettings,
+      ...(configOverride && typeof configOverride === "object" ? configOverride : {}),
+    };
+    const durationSeconds = Math.max(2, Math.min(12, Number(usedConfig.durationSeconds) || 6));
+    const continuityNote = String(usedConfig.continuityNote || "").trim();
+    const transitionStyle = String(usedConfig.transitionStyle || "match-cut").trim() || "match-cut";
+    const referenceImagePolicy = normalizeReferenceImagePolicyValue(usedConfig.referenceImagePolicy);
+    const promptTemplate = String(usedConfig.promptTemplate || "").trim();
+    const title = String(usedConfig.title || "").trim() || `串联视频 · ${normalizedIndexes.length} 镜`;
+
+    const rawSequenceIdeas = normalizedIndexes
+      .map((ideaIndex) => {
+        const idea = ideas[ideaIndex];
+        if (!idea) return null;
+        const imageRef = splitImageReference(idea?.generatedImage?.url);
+        return {
+          ideaIndex,
+          title: idea.title,
+          scene: idea.scene,
+          camera: idea.camera,
+          mood: idea.mood,
+          twist: idea.twist,
+          seedIdea: idea.seedIdea,
+          referenceImageDataUrl: imageRef.dataUrl,
+          referenceImageUrl: imageRef.url,
+        };
+      })
+      .filter(Boolean);
+
+    if (rawSequenceIdeas.length < 2) {
+      updateStatus("error", "镜头数量不足", "请确认所选分镜都存在后重试。");
+      return false;
+    }
+
+    const sequenceIdeas = applyReferencePolicyToSequenceIdeas(rawSequenceIdeas, referenceImagePolicy);
+    const usedReferenceImageCount = countSequenceReferenceImages(sequenceIdeas);
+
+    const sequenceMetaText = `镜头 ${sequenceIdeas.length} · 图参 ${usedReferenceImageCount} · 策略 ${formatReferenceImagePolicyLabel(
+      referenceImagePolicy
+    )}`;
+    const retryPayload = {
+      kind: "video-sequence",
+      shotIndexes: normalizedIndexes,
+      config: {
+        ...usedConfig,
+        title,
+        durationSeconds,
+        transitionStyle,
+        referenceImagePolicy,
+        continuityNote,
+        negativePrompt: String(usedConfig.negativePrompt || "").trim(),
+        promptTemplate,
+      },
+      baseRecordId: baseRecordId || "",
+    };
+
+    const taskId = startTaskRun({
+      type: "video-sequence",
+      title,
+      summary: `${videoModelValue} · ${usedConfig.aspectRatio || "16:9"} · ${durationSeconds}s`,
+      sourceLabel: `串联 ${sequenceIdeas.length} 镜`,
+      sequenceMetaText,
+      retryPayload,
+    });
+
+    setSequenceVideoRunning(true);
+    updateStatus(
+      "loading",
+      "串联视频生成中",
+      `正在将 ${sequenceIdeas.length} 条分镜串联为单条视频（图参 ${usedReferenceImageCount} 张）...`
+    );
+    let backendTaskId = "";
+
+    try {
+      const firstReferenceDataUrl =
+        sequenceIdeas.find((shot) => String(shot.referenceImageDataUrl || "").trim())?.referenceImageDataUrl || "";
+      const firstReferenceUrl =
+        sequenceIdeas.find((shot) => String(shot.referenceImageUrl || "").trim())?.referenceImageUrl || "";
+
+      const createResult = await createVideoTask({
+        storyboardSequence: sequenceIdeas.map((shot) => ({
+          title: shot.title,
+          scene: shot.scene,
+          camera: shot.camera,
+          mood: shot.mood,
+          twist: shot.twist,
+          seedIdea: shot.seedIdea,
+          referenceImageDataUrl: shot.referenceImageDataUrl,
+          referenceImageUrl: shot.referenceImageUrl,
+        })),
+        seedText: settings.seedText,
+        modeId: settings.modeId,
+        styleBias: settings.styleBias,
+        videoModel: videoModelValue,
+        aspectRatio: String(usedConfig.aspectRatio || "16:9"),
+        durationSeconds,
+        transitionStyle,
+        referenceImagePolicy,
+        continuityNote,
+        negativePrompt: String(usedConfig.negativePrompt || "").trim(),
+        sequencePromptTemplate: promptTemplate,
+        imageDataUrl: firstReferenceDataUrl,
+        imageUrl: firstReferenceUrl,
+      });
+
+      backendTaskId = createResult?.task?.id || "";
+      if (!backendTaskId) {
+        throw new Error("任务创建失败，请重试。");
+      }
+
+      pendingRef.current = { taskId: backendTaskId, kind: "video-sequence" };
+
+      const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
+        if (task.status === "running" || task.status === "pending") {
+          const stageSummary = formatTaskStageSummary(task);
+          patchTaskRun(taskId, {
+            status: task.status,
+            progress: Number(task.progress) || 0,
+            stageText: String(task.stageText || ""),
+            summary: stageSummary,
+          });
+          updateStatus("loading", "串联视频生成中", stageSummary);
+        }
+      });
+
+      if (finalTask.status === "cancelled") {
+        finishTaskRun(taskId, {
+          status: "cancelled",
+          progress: Number(finalTask.progress) || 0,
+          stageText: String(finalTask.stageText || "已取消"),
+          summary: "请求已取消。",
+        });
+        updateStatus("idle", "已取消", "串联视频任务已取消。");
+        return false;
+      }
+
+      if (finalTask.status !== "success") {
+        throw new Error(finalTask.error || "串联视频生成失败，请稍后重试。");
+      }
+
+      const videoUrl = String(finalTask?.result?.videoUrl || "").trim();
+      if (!videoUrl) {
+        throw new Error("模型未返回视频地址，请切换模型或调整模板后重试。");
+      }
+
+      const now = Date.now();
+      const historyId = baseRecordId || `seq-${now}-${Math.random().toString(16).slice(2, 8)}`;
+      const record = {
+        id: historyId,
+        createdAt: now,
+        title,
+        shotIndexes: normalizedIndexes,
+        shots: sequenceIdeas.map((shot) => ({
+          ideaIndex: shot.ideaIndex,
+          title: shot.title,
+          scene: shot.scene,
+          hasImageRef: Boolean(String(shot.referenceImageDataUrl || "").trim() || String(shot.referenceImageUrl || "").trim()),
+        })),
+        referenceImageCount: usedReferenceImageCount,
+        config: {
+          ...usedConfig,
+          durationSeconds,
+          transitionStyle,
+          referenceImagePolicy,
+        },
+        generatedVideo: {
+          status: "success",
+          url: videoUrl,
+          error: "",
+          model: String(finalTask?.result?.model || videoModelValue),
+          mimeType: String(finalTask?.result?.mimeType || "video/mp4"),
+          prompt: String(finalTask?.result?.prompt || ""),
+          durationSeconds: Number(finalTask?.result?.durationSeconds) || durationSeconds,
+        },
+      };
+
+      let savedRecord = record;
+      if (currentProjectId && currentChapterId) {
+        try {
+          const saveData = await saveChapterSequenceVideo(currentProjectId, currentChapterId, record);
+          if (saveData?.item?.id) {
+            savedRecord = saveData.item;
+          }
+        } catch {
+          // Keep local successful record for immediate UX even if persistence fails transiently.
+        }
+      }
+
+      setVideoComposerResult(savedRecord);
+      setSequenceVideoHistory((prev) => [savedRecord, ...prev.filter((item) => item.id !== savedRecord.id)].slice(0, 80));
+
+      finishTaskRun(taskId, {
+        status: "success",
+        progress: 100,
+        stageText: String(finalTask.stageText || "完成"),
+        summary: `串联视频已完成（${sequenceIdeas.length} 镜，图参 ${usedReferenceImageCount} 张）。`,
+        sequenceMetaText,
+        resultPayload: {
+          kind: "video-sequence",
+          sequenceHistoryId: savedRecord.id,
+          title: savedRecord.title,
+          shotIndexes: savedRecord.shotIndexes,
+          videoUrl: savedRecord.generatedVideo.url,
+          mimeType: savedRecord.generatedVideo.mimeType,
+          model: savedRecord.generatedVideo.model,
+          durationSeconds: savedRecord.generatedVideo.durationSeconds,
+          prompt: savedRecord.generatedVideo.prompt,
+          referenceImageCount: usedReferenceImageCount,
+          referenceImagePolicy,
+        },
+      });
+      updateStatus("success", "串联视频完成", `已生成连续视频：${savedRecord.title}（图参 ${usedReferenceImageCount} 张）`);
+      return true;
+    } catch (error) {
+      const message = error?.message || "串联视频生成失败，请稍后重试。";
+      finishTaskRun(taskId, {
+        status: "error",
+        stageText: "失败",
+        summary: message,
+      });
+      updateStatus("error", "串联视频失败", message);
+      return false;
+    } finally {
+      if (pendingRef.current?.taskId === backendTaskId) {
+        pendingRef.current = null;
+      }
+      setSequenceVideoRunning(false);
+    }
+  };
+
+  const generateSequenceVideo = async () => {
+    await runSequenceVideoTask({
+      shotIndexes: videoComposerShotIndexes,
+    });
+  };
+
+  const downloadSequenceRecord = async (record) => {
+    const videoUrl = String(record?.generatedVideo?.url || "").trim();
+    if (!isRenderableVideoUrl(videoUrl)) {
+      updateStatus("error", "无可下载视频", "该历史记录没有可用视频地址。");
+      return;
+    }
+    const stamp = formatFileStamp(new Date());
+    const safeTitle = String(record?.title || "sequence-video")
+      .replace(/[\\/:*?"<>|]/g, "-")
+      .replace(/\s+/g, "-")
+      .slice(0, 50);
+    const extension = inferVideoExtension(record?.generatedVideo?.mimeType, videoUrl);
+    const filename = `${safeTitle || "sequence-video"}-${stamp}.${extension}`;
+    try {
+      await triggerDownloadFromUrl(filename, videoUrl);
+      updateStatus("success", "视频已导出", "串联视频已下载。");
+    } catch {
+      updateStatus("error", "下载失败", "视频下载失败，请稍后重试。");
+    }
+  };
+
+  const useSequenceHistory = (id) => {
+    const safeId = String(id || "").trim();
+    if (!safeId) return;
+    const item = sequenceVideoHistory.find((entry) => entry.id === safeId);
+    if (!item) return;
+    setVideoComposerShotIndexes(
+      Array.isArray(item.shotIndexes)
+        ? item.shotIndexes.filter((index) => Number.isInteger(index) && index >= 0 && index < ideas.length)
+        : []
+    );
+    setVideoComposerSettings((prev) => ({
+      ...prev,
+      ...(item.config && typeof item.config === "object" ? item.config : {}),
+      referenceImagePolicy: normalizeReferenceImagePolicyValue(item?.config?.referenceImagePolicy || prev.referenceImagePolicy),
+    }));
+    setVideoComposerResult(item);
+    setVideoComposerOpen(true);
+    updateStatus("success", "已载入历史配置", `已载入：${item.title || "未命名串联视频"}`);
+  };
+
+  const retrySequenceHistory = async (id) => {
+    const safeId = String(id || "").trim();
+    if (!safeId) return;
+    const item = sequenceVideoHistory.find((entry) => entry.id === safeId);
+    if (!item) {
+      updateStatus("error", "历史不存在", "未找到对应串联视频历史。");
+      return;
+    }
+    await runSequenceVideoTask({
+      shotIndexes: Array.isArray(item.shotIndexes) ? item.shotIndexes : [],
+      configOverride: item.config,
+      baseRecordId: item.id,
+    });
+  };
+
+  const deleteSequenceHistory = async (id) => {
+    const safeId = String(id || "").trim();
+    if (!safeId) return;
+    if (currentProjectId && currentChapterId) {
+      try {
+        await deleteChapterSequenceVideo(currentProjectId, currentChapterId, safeId);
+      } catch {
+        updateStatus("error", "删除失败", "服务端删除串联历史失败，请重试。");
+        return;
+      }
+    }
+
+    setSequenceVideoHistory((prev) => prev.filter((item) => item.id !== safeId));
+    setVideoComposerResult((prev) => (prev?.id === safeId ? null : prev));
+    updateStatus("success", "历史已删除", "该串联视频历史已移除。");
   };
 
   const remixOne = async (index) => {
@@ -927,6 +2536,9 @@ export default function StudioPage() {
       setIdeas((prev) => {
         nextIdeas = prev.map((item, idx) => (idx === index ? replacement : item));
         return nextIdeas;
+      });
+      persistChapterIdeas(nextIdeas).catch(() => {
+        // non-blocking: keep UI responsive when persistence fails transiently
       });
 
       let currentHistoryId = activeHistoryId;
@@ -1029,15 +2641,22 @@ export default function StudioPage() {
 
   const clearResults = () => {
     setIdeas([]);
+    persistChapterIdeas([]).catch(() => {
+      // non-blocking: keep UI responsive when persistence fails transiently
+    });
     setSelectedIdeaIndexes([]);
     setLastSelectedIndex(null);
+    setVideoComposerShotIndexes([]);
+    setVideoComposerResult(null);
     setActiveHistoryId(null);
+    activeHistoryIdRef.current = null;
     updateStatus("idle", "已清空", "结果区已清空。");
   };
 
   const clearHistory = async () => {
     setHistory([]);
     setActiveHistoryId(null);
+    activeHistoryIdRef.current = null;
     try {
       await clearHistoryEntries();
     } catch {
@@ -1045,29 +2664,53 @@ export default function StudioPage() {
     }
   };
 
-  const restoreHistory = (id) => {
-    const item = history.find((entry) => entry.id === id);
+  const restoreHistory = (target, options = {}) => {
+    const item =
+      target && typeof target === "object"
+        ? target
+        : history.find((entry) => entry.id === String(target || ""));
     if (!item) {
       return;
     }
 
+    const focusIdeaIndex = Number(options?.focusIdeaIndex);
+    const hasFocusIdea =
+      Number.isInteger(focusIdeaIndex) &&
+      focusIdeaIndex >= 0 &&
+      focusIdeaIndex < (Array.isArray(item.ideas) ? item.ideas.length : 0);
+
     setIdeas(item.ideas || []);
-    setSelectedIdeaIndexes([]);
-    setLastSelectedIndex(null);
+    persistChapterIdeas(item.ideas || []).catch(() => {
+      // non-blocking: keep UI responsive when persistence fails transiently
+    });
+    setFilterMode("all");
+    setVideoComposerShotIndexes([]);
+    setVideoComposerResult(null);
+    setSelectedIdeaIndexes(hasFocusIdea ? [focusIdeaIndex] : []);
+    setLastSelectedIndex(hasFocusIdea ? focusIdeaIndex : null);
     setActiveHistoryId(item.id);
+    activeHistoryIdRef.current = item.id;
     updateSettings({
       seedText: item.seedText || "",
       modeId: item.modeId || settings.modeId,
       styleBias: item.styleBias || settings.styleBias,
     });
 
-    updateStatus("success", "历史已恢复", `已恢复 ${formatTime(item.createdAt)} 的结果。`);
+    scrollToResults();
+    if (hasFocusIdea) {
+      scrollToIdeaCard(focusIdeaIndex);
+    }
+
+    const badge = String(options?.badge || "历史已恢复");
+    const text = String(options?.text || `已恢复 ${formatTime(item.createdAt)} 的结果。`);
+    updateStatus("success", badge, text);
   };
 
   const removeHistory = async (id) => {
     setHistory((prev) => prev.filter((item) => item.id !== id));
     if (activeHistoryId === id) {
       setActiveHistoryId(null);
+      activeHistoryIdRef.current = null;
     }
 
     try {
@@ -1143,7 +2786,13 @@ export default function StudioPage() {
       return;
     }
 
-    setIdeas((prev) => prev.filter((_, index) => !selectedIdeaIndexes.includes(index)));
+    setIdeas((prev) => {
+      const nextIdeas = prev.filter((_, index) => !selectedIdeaIndexes.includes(index));
+      persistChapterIdeas(nextIdeas).catch(() => {
+        // non-blocking: keep UI responsive when persistence fails transiently
+      });
+      return nextIdeas;
+    });
     updateStatus("success", "批量删除完成", `已删除 ${selectedIdeaIndexes.length} 条分镜。`);
     setSelectedIdeaIndexes([]);
     setLastSelectedIndex(null);
@@ -1196,8 +2845,14 @@ export default function StudioPage() {
     setIdeas(expansions);
     setSelectedIdeaIndexes([]);
     setLastSelectedIndex(null);
+    setVideoComposerShotIndexes([]);
+    setVideoComposerResult(null);
     setActiveHistoryId(null);
+    activeHistoryIdRef.current = null;
     setFilterMode("all");
+    persistChapterIdeas(expansions).catch(() => {
+      // non-blocking: keep UI responsive when persistence fails transiently
+    });
     updateSettings({
       seedText: String(result.seed || ""),
     });
@@ -1384,6 +3039,67 @@ export default function StudioPage() {
             返回主页面
           </Link>
         </div>
+        <section className="workspace-shell mt-5 border-t border-atelier-fg/10 pt-5">
+          <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto_auto] md:items-end">
+            <FieldLabel label="项目选择">
+              <EditorialSelect
+                value={currentProjectId}
+                onChange={handleSwitchProject}
+                options={projectSelectOptions}
+                placeholder={workspaceLoading ? "加载项目中..." : "请选择项目"}
+                disabled={workspaceLoading || workspaceBusy || projectSelectOptions.length === 0}
+              />
+              <small className="text-xs text-atelier-subtle">
+                {activeProject
+                  ? `${activeProject.chapterCount || 0} 章 · ${activeProject.shotCount || 0} 条分镜`
+                  : "切换项目后自动加载章节"}
+              </small>
+            </FieldLabel>
+
+            <FieldLabel label="章节选择">
+              <EditorialSelect
+                value={currentChapterId}
+                onChange={handleSwitchChapter}
+                options={chapterSelectOptions}
+                placeholder={workspaceLoading ? "加载章节中..." : "请选择章节"}
+                disabled={workspaceLoading || workspaceBusy || chapterSelectOptions.length === 0}
+              />
+              <small className="text-xs text-atelier-subtle">
+                {activeChapter
+                  ? `章节序号 ${activeChapter.sortOrder || 0} · ${activeChapter.shotCount || 0} 条分镜`
+                  : "章节为空，可通过工作区管理创建"}
+              </small>
+            </FieldLabel>
+
+            <button
+              type="button"
+              onClick={() => setWorkflowHubOpen(true)}
+              className="workspace-open-button"
+              disabled={workspaceLoading || workspaceBusy}
+            >
+              工作流中心
+            </button>
+            <button
+              type="button"
+              onClick={openVideoComposer}
+              className="workspace-open-button"
+              disabled={workspaceLoading || workspaceBusy || selectedIdeaIndexes.length < 2 || anyVideoLoading}
+            >
+              串联成片
+            </button>
+          </div>
+        </section>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
+            Project · {activeProject?.name || "未选择"}
+          </span>
+          <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
+            Chapter · {activeChapter?.title || "未选择"}
+          </span>
+          <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
+            路径 · /projects/{currentProjectId || "-"} / chapters/{currentChapterId || "-"}
+          </span>
+        </div>
         <h1 className="mt-5 font-display text-5xl leading-[0.9] md:text-8xl">
           Curated <em className="text-atelier-accent">Storyboard</em>
           <br />
@@ -1393,6 +3109,389 @@ export default function StudioPage() {
           这是一个可长期复用的分镜创意工作台。你给一个镜头种子，它输出一组可拍摄、可拼接、可继续写成脚本的分镜方向。
         </p>
       </header>
+
+      <VideoComposerModal
+        open={videoComposerOpen}
+        running={sequenceVideoRunning}
+        selectedShots={composerSelectedShots}
+        config={videoComposerSettings}
+        currentResult={videoComposerResult}
+        history={sequenceVideoHistory}
+        referenceStats={composerReferenceStats}
+        onClose={() => setVideoComposerOpen(false)}
+        onConfigChange={updateVideoComposerConfig}
+        onResetFromSelection={syncComposerShotsFromSelection}
+        onRestoreOriginalOrder={restoreComposerOriginalOrder}
+        onClearSelection={clearComposerSelection}
+        onRemoveShot={removeComposerShot}
+        onMoveShot={moveComposerShot}
+        onGenerate={generateSequenceVideo}
+        onDownloadCurrent={() => downloadSequenceRecord(videoComposerResult)}
+        onUseHistory={useSequenceHistory}
+        onRetryHistory={retrySequenceHistory}
+        onDownloadHistory={(id) => {
+          const item = sequenceVideoHistory.find((entry) => entry.id === String(id || "").trim());
+          if (item) {
+            downloadSequenceRecord(item);
+          }
+        }}
+        onDeleteHistory={deleteSequenceHistory}
+      />
+
+      <WorkflowHubModal
+        open={workflowHubOpen}
+        activeTab={workflowHubTab}
+        onChangeTab={setWorkflowHubTab}
+        onClose={() => setWorkflowHubOpen(false)}
+        batchProps={{
+          batchText,
+          setBatchText,
+          batchCount,
+          onRun: handleBatchRun,
+          running: batchRunning,
+          batchResults,
+          onUseResult: useBatchResult,
+          onCopySeed: copyBatchSeed,
+          onCopyResult: copyBatchResult,
+          onExportResult: exportBatchResult,
+        }}
+        queueProps={{
+          runs: taskRuns,
+          onClear: clearTaskRuns,
+          onRemove: removeTaskRun,
+          onOpen: openTaskResult,
+          onRetry: retryTaskRunFromQueue,
+          filterMode: queueFilterMode,
+          onFilterChange: setQueueFilterMode,
+        }}
+        historyProps={{
+          history,
+          onRestore: restoreHistory,
+          onRemove: removeHistory,
+          onClear: clearHistory,
+        }}
+        advancedConfig={{
+          sequencePromptTemplate: videoComposerSettings.promptTemplate,
+          sequenceContinuityNote: videoComposerSettings.continuityNote,
+        }}
+        onAdvancedConfigChange={(patch) =>
+          updateVideoComposerConfig({
+            ...(patch?.sequencePromptTemplate !== undefined ? { promptTemplate: patch.sequencePromptTemplate } : {}),
+            ...(patch?.sequenceContinuityNote !== undefined ? { continuityNote: patch.sequenceContinuityNote } : {}),
+          })
+        }
+        promptTemplate={settings.promptTemplate}
+        onPromptTemplateChange={(nextTemplate) => updateSettings({ promptTemplate: nextTemplate })}
+        onOpenWorkspaceManager={() => {
+          setWorkflowHubOpen(false);
+          setWorkspaceModalTab("project");
+          setWorkspaceModalOpen(true);
+        }}
+      />
+
+      {workspaceModalOpen ? (
+        <div className="workspace-modal fixed inset-0 z-[70] flex items-center justify-center px-4 py-6 md:px-8">
+          <button
+            type="button"
+            className="workspace-modal-backdrop absolute inset-0"
+            onClick={closeWorkspaceModal}
+            aria-label="关闭工作区管理弹窗"
+          />
+
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label="工作区管理"
+            className="workspace-modal-panel motion-rise relative z-10 w-full max-w-5xl"
+          >
+            <header className="workspace-modal-header">
+              <div>
+                <p className="eyebrow-label">Workspace / Settings</p>
+                <h2 className="mt-2 font-display text-4xl leading-[0.9] md:text-5xl">工作区管理</h2>
+              </div>
+              <button
+                type="button"
+                onClick={closeWorkspaceModal}
+                className="workspace-modal-close"
+                aria-label="关闭"
+              >
+                关闭
+              </button>
+            </header>
+
+            <div className="workspace-tab-row">
+              <button
+                type="button"
+                className={`workspace-tab-button ${workspaceModalTab === "project" ? "workspace-tab-button-active" : ""}`}
+                onClick={() => setWorkspaceModalTab("project")}
+              >
+                项目管理
+              </button>
+              <button
+                type="button"
+                className={`workspace-tab-button ${workspaceModalTab === "chapter" ? "workspace-tab-button-active" : ""}`}
+                onClick={() => setWorkspaceModalTab("chapter")}
+              >
+                章节管理
+              </button>
+            </div>
+
+            <div className="workspace-modal-body">
+              {workspaceModalTab === "project" ? (
+                <div className="grid gap-5 md:grid-cols-2">
+                  <div className="workspace-modal-block">
+                    <p className="eyebrow-label">All Projects</p>
+                    <h3 className="mt-2 font-display text-2xl leading-none">全部项目</h3>
+                    <p className="mt-2 text-xs text-atelier-subtle">点击列表可直接切换当前项目。</p>
+
+                    <div className="workspace-entity-list mt-3">
+                      {projectItems.length === 0 ? (
+                        <p className="workspace-entity-empty">暂无项目</p>
+                      ) : (
+                        projectItems.map((item) => {
+                          const active = item.id === currentProjectId;
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => handleSwitchProject(item.id)}
+                              className={`workspace-entity-item ${active ? "workspace-entity-item-active" : ""}`}
+                              disabled={workspaceLoading || workspaceBusy}
+                            >
+                              <span className="workspace-entity-title">{item.name || "未命名项目"}</span>
+                              <span className="workspace-entity-meta">
+                                {item.chapterCount || 0} 章 · {item.shotCount || 0} 条分镜
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    <div className="mt-4 border-t border-atelier-fg/10 pt-3">
+                      <p className="eyebrow-label">Create Project</p>
+                      <label className="workspace-inline-field">
+                        <span className="workspace-inline-label">项目名</span>
+                        <input
+                          type="text"
+                          value={newProjectName}
+                          onChange={(event) => setNewProjectName(event.target.value)}
+                          maxLength={60}
+                          className="workspace-text-input"
+                          placeholder="例如：香氛广告 · 春季 Campaign"
+                        />
+                      </label>
+
+                      <label className="workspace-inline-field">
+                        <span className="workspace-inline-label">项目简介（可选）</span>
+                        <input
+                          type="text"
+                          value={newProjectDescription}
+                          onChange={(event) => setNewProjectDescription(event.target.value)}
+                          maxLength={120}
+                          className="workspace-text-input"
+                          placeholder="一句话描述这个项目的目标和调性"
+                        />
+                      </label>
+
+                      <div className="workspace-action-row">
+                        <button
+                          type="button"
+                          onClick={handleCreateProject}
+                          className="workspace-action-button"
+                          disabled={workspaceLoading || workspaceBusy}
+                        >
+                          新建项目
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="workspace-modal-block">
+                    <p className="eyebrow-label">Current Project</p>
+                    <h3 className="mt-2 font-display text-2xl leading-none">{activeProject?.name || "未选择项目"}</h3>
+                    <p className="mt-2 text-xs text-atelier-subtle">
+                      {activeProject
+                        ? `${activeProject.chapterCount || 0} 章 · ${activeProject.shotCount || 0} 条分镜`
+                        : "请先选择项目"}
+                    </p>
+
+                    <label className="workspace-inline-field">
+                      <span className="workspace-inline-label">重命名当前项目</span>
+                      <input
+                        type="text"
+                        value={renameProjectName}
+                        onChange={(event) => setRenameProjectName(event.target.value)}
+                        maxLength={60}
+                        className="workspace-text-input"
+                        placeholder="当前项目名称"
+                        disabled={!currentProjectId}
+                      />
+                    </label>
+
+                    <label className="workspace-inline-field">
+                      <span className="workspace-inline-label">更新当前简介</span>
+                      <input
+                        type="text"
+                        value={renameProjectDescription}
+                        onChange={(event) => setRenameProjectDescription(event.target.value)}
+                        maxLength={120}
+                        className="workspace-text-input"
+                        placeholder="当前项目简介"
+                        disabled={!currentProjectId}
+                      />
+                    </label>
+
+                    <div className="workspace-action-row">
+                      <button
+                        type="button"
+                        onClick={handleRenameProject}
+                        className="workspace-action-button"
+                        disabled={workspaceLoading || workspaceBusy || !currentProjectId}
+                      >
+                        保存项目
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeleteProject}
+                        className="workspace-action-button workspace-action-button-danger"
+                        disabled={workspaceLoading || workspaceBusy || !currentProjectId}
+                      >
+                        {pendingProjectDelete ? "确认删除项目" : "删除项目"}
+                      </button>
+                      {pendingProjectDelete ? (
+                        <button
+                          type="button"
+                          onClick={() => setPendingProjectDelete(false)}
+                          className="workspace-action-button"
+                          disabled={workspaceLoading || workspaceBusy}
+                        >
+                          取消删除
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid gap-5 md:grid-cols-2">
+                  <div className="workspace-modal-block">
+                    <p className="eyebrow-label">All Chapters</p>
+                    <h3 className="mt-2 font-display text-2xl leading-none">全部章节</h3>
+                    <p className="mt-2 text-xs text-atelier-subtle">
+                      {activeProject?.name
+                        ? `项目：${activeProject.name}（点击列表可切换章节）`
+                        : "请先选择项目"}
+                    </p>
+
+                    <div className="workspace-entity-list mt-3">
+                      {chapterItems.length === 0 ? (
+                        <p className="workspace-entity-empty">暂无章节</p>
+                      ) : (
+                        chapterItems.map((item) => {
+                          const active = item.id === currentChapterId;
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => handleSwitchChapter(item.id)}
+                              className={`workspace-entity-item ${active ? "workspace-entity-item-active" : ""}`}
+                              disabled={workspaceLoading || workspaceBusy || !currentProjectId}
+                            >
+                              <span className="workspace-entity-title">{item.title || "未命名章节"}</span>
+                              <span className="workspace-entity-meta">
+                                序号 {item.sortOrder || 0} · {item.shotCount || 0} 条分镜
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    <div className="mt-4 border-t border-atelier-fg/10 pt-3">
+                      <p className="eyebrow-label">Create Chapter</p>
+                      <label className="workspace-inline-field">
+                        <span className="workspace-inline-label">章节名</span>
+                        <input
+                          type="text"
+                          value={newChapterTitle}
+                          onChange={(event) => setNewChapterTitle(event.target.value)}
+                          maxLength={60}
+                          className="workspace-text-input"
+                          placeholder="例如：第 3 章 · 危机夜行"
+                          disabled={!currentProjectId}
+                        />
+                      </label>
+
+                      <div className="workspace-action-row">
+                        <button
+                          type="button"
+                          onClick={handleCreateChapter}
+                          className="workspace-action-button"
+                          disabled={workspaceLoading || workspaceBusy || !currentProjectId}
+                        >
+                          新建章节
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="workspace-modal-block">
+                    <p className="eyebrow-label">Current Chapter</p>
+                    <h3 className="mt-2 font-display text-2xl leading-none">{activeChapter?.title || "未选择章节"}</h3>
+                    <p className="mt-2 text-xs text-atelier-subtle">
+                      {activeChapter
+                        ? `序号 ${activeChapter.sortOrder || 0} · ${activeChapter.shotCount || 0} 条分镜`
+                        : "请先选择章节"}
+                    </p>
+
+                    <label className="workspace-inline-field">
+                      <span className="workspace-inline-label">重命名当前章节</span>
+                      <input
+                        type="text"
+                        value={renameChapterTitle}
+                        onChange={(event) => setRenameChapterTitle(event.target.value)}
+                        maxLength={60}
+                        className="workspace-text-input"
+                        placeholder="当前章节标题"
+                        disabled={!currentProjectId || !currentChapterId}
+                      />
+                    </label>
+
+                    <div className="workspace-action-row">
+                      <button
+                        type="button"
+                        onClick={handleRenameChapter}
+                        className="workspace-action-button"
+                        disabled={workspaceLoading || workspaceBusy || !currentProjectId || !currentChapterId}
+                      >
+                        保存章节
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeleteChapter}
+                        className="workspace-action-button workspace-action-button-danger"
+                        disabled={workspaceLoading || workspaceBusy || !currentProjectId || !currentChapterId}
+                      >
+                        {pendingChapterDelete ? "确认删除章节" : "删除章节"}
+                      </button>
+                      {pendingChapterDelete ? (
+                        <button
+                          type="button"
+                          onClick={() => setPendingChapterDelete(false)}
+                          className="workspace-action-button"
+                          disabled={workspaceLoading || workspaceBusy}
+                        >
+                          取消删除
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <main className="mx-auto grid w-[min(1600px,calc(100vw-2rem))] items-start gap-8 py-10 md:w-[min(1600px,calc(100vw-4rem))] lg:grid-cols-[5fr_7fr] lg:gap-10">
         <aside className="workbench-panel motion-rise motion-rise-delay-1 relative lg:sticky lg:top-6">
@@ -1476,6 +3575,14 @@ export default function StudioPage() {
                   />
                 </FieldLabel>
 
+                <FieldLabel label="视频模型">
+                  <input
+                    value={videoModelValue}
+                    onChange={(event) => updateSettings({ videoModel: event.target.value })}
+                    className="w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm outline-none transition-colors duration-500 focus:border-atelier-accent"
+                  />
+                </FieldLabel>
+
                 <FieldLabel label="Temperature">
                   <RangeNumberField
                     value={settings.temperature}
@@ -1499,19 +3606,9 @@ export default function StudioPage() {
                 </FieldLabel>
               </div>
 
-              <details className="mt-4 border-t border-atelier-fg/10 pt-3" open>
-                <summary className="details-summary group flex cursor-pointer list-none items-center justify-between text-[10px] uppercase tracking-editorial text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent">
-                  <span>高级 Prompt 模板</span>
-                  <span className="details-chevron transition-transform duration-500 group-hover:text-atelier-accent" aria-hidden="true">
-                    <SummaryChevron />
-                  </span>
-                </summary>
-                <textarea
-                  value={settings.promptTemplate}
-                  onChange={(event) => updateSettings({ promptTemplate: event.target.value })}
-                  className="mt-3 min-h-44 w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm leading-relaxed outline-none transition-colors duration-500 placeholder:font-display placeholder:italic placeholder:text-atelier-subtle focus:border-atelier-accent"
-                />
-              </details>
+              <p className="mt-4 border-t border-atelier-fg/10 pt-3 text-xs text-atelier-subtle">
+                高级 Prompt 模板、批量工作流、任务队列与历史记录已整合到“工作流中心”。
+              </p>
             </section>
 
             <ModeLibrary modes={STORYBOARD_MODES} activeModeId={settings.modeId} onSelect={(modeId) => updateSettings({ modeId })} />
@@ -1533,22 +3630,11 @@ export default function StudioPage() {
               <p className="mt-3 text-xs text-atelier-subtle">快捷键：Ctrl/Cmd + Enter 直接生成</p>
             </section>
 
-            <BatchWorkflow
-              batchText={batchText}
-              setBatchText={setBatchText}
-              batchCount={batchCount}
-              onRun={handleBatchRun}
-              running={batchRunning}
-              batchResults={batchResults}
-              onUseResult={useBatchResult}
-              onCopySeed={copyBatchSeed}
-              onCopyResult={copyBatchResult}
-              onExportResult={exportBatchResult}
-            />
           </form>
         </aside>
 
         <section className="workbench-panel motion-rise motion-rise-delay-2 relative">
+          <div ref={resultsAnchorRef} className="absolute -top-2 left-0 h-px w-px" aria-hidden="true" />
           <p className="vertical-tag right-[-22px] top-5 hidden lg:block">Results / Edition</p>
 
           <header className="flex flex-wrap items-start justify-between gap-4 border-b border-atelier-fg/15 pb-4">
@@ -1572,6 +3658,7 @@ export default function StudioPage() {
               <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">条数 · {settings.ideaCount}</span>
               <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">文本模型 · {textModelValue}</span>
               <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">出图模型 · {imageModelValue}</span>
+              <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">视频模型 · {videoModelValue}</span>
             </div>
           </section>
 
@@ -1650,27 +3737,20 @@ export default function StudioPage() {
                     onRemix={remixOne}
                     onGenerateImage={generateIdeaImage}
                     onDownloadImage={downloadIdeaImage}
+                    onGenerateVideo={generateIdeaVideo}
+                    onDownloadVideo={downloadIdeaVideo}
                     onFavorite={toggleFavorite}
                     favorite={favorite}
                     selected={selectedIdeaIndexes.includes(index)}
                     onToggleSelect={(event) => toggleSelectIdea(index, event.shiftKey)}
                     imageState={idea.generatedImage}
+                    videoState={idea.generatedVideo}
                   />
                 );
               })}
             </section>
           )}
 
-          <TaskQueuePanel
-            runs={taskRuns}
-            onClear={clearTaskRuns}
-            onRemove={removeTaskRun}
-            onOpen={openTaskResult}
-            filterMode={queueFilterMode}
-            onFilterChange={setQueueFilterMode}
-          />
-
-          <HistoryPanel history={history} onRestore={restoreHistory} onRemove={removeHistory} onClear={clearHistory} />
         </section>
       </main>
     </div>
@@ -1741,6 +3821,18 @@ function makeIdeaKey(idea, index) {
   return `${makeFavoriteKey(idea)}__${index}`;
 }
 
+function formatProjectOptionLabel(item) {
+  const name = String(item?.name || "").trim() || "未命名项目";
+  const chapterCount = Number(item?.chapterCount || 0);
+  return `${name} · ${chapterCount} 章`;
+}
+
+function formatChapterOptionLabel(item) {
+  const title = String(item?.title || "").trim() || "未命名章节";
+  const shotCount = Number(item?.shotCount || 0);
+  return `${title} · ${shotCount} 条`;
+}
+
 function isEditableTarget(target) {
   if (!(target instanceof Element)) return false;
   const tag = target.tagName.toLowerCase();
@@ -1763,6 +3855,150 @@ function triggerDownloadFromDataUrl(filename, dataUrl) {
   a.remove();
 }
 
+function splitImageReference(rawValue) {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return { dataUrl: "", url: "" };
+  }
+  if (value.startsWith("data:image/")) {
+    return { dataUrl: value, url: "" };
+  }
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return { dataUrl: "", url: value };
+  }
+  return { dataUrl: "", url: "" };
+}
+
+function normalizeReferenceImagePolicyValue(value) {
+  const safe = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (safe === "all" || safe === "keyframes" || safe === "first_last" || safe === "text_only") {
+    return safe;
+  }
+  return "all";
+}
+
+function applyReferencePolicyToSequenceIdeas(sequenceIdeas, policy) {
+  const sequence = Array.isArray(sequenceIdeas) ? sequenceIdeas : [];
+  const safePolicy = normalizeReferenceImagePolicyValue(policy);
+  if (sequence.length === 0) {
+    return [];
+  }
+
+  if (safePolicy === "all") {
+    return sequence.map((shot) => ({ ...shot }));
+  }
+
+  if (safePolicy === "text_only") {
+    return sequence.map((shot) => ({
+      ...shot,
+      referenceImageDataUrl: "",
+      referenceImageUrl: "",
+    }));
+  }
+
+  const keepIndexes = new Set();
+  if (safePolicy === "first_last") {
+    keepIndexes.add(0);
+    keepIndexes.add(sequence.length - 1);
+  } else if (safePolicy === "keyframes") {
+    keepIndexes.add(0);
+    keepIndexes.add(Math.floor((sequence.length - 1) / 2));
+    keepIndexes.add(sequence.length - 1);
+  }
+
+  return sequence.map((shot, index) => {
+    if (keepIndexes.has(index)) {
+      return { ...shot };
+    }
+    return {
+      ...shot,
+      referenceImageDataUrl: "",
+      referenceImageUrl: "",
+    };
+  });
+}
+
+function countSequenceReferenceImages(sequenceIdeas) {
+  const sequence = Array.isArray(sequenceIdeas) ? sequenceIdeas : [];
+  return sequence.filter((shot) => {
+    const dataUrl = String(shot?.referenceImageDataUrl || "").trim();
+    const url = String(shot?.referenceImageUrl || "").trim();
+    return Boolean(dataUrl || url);
+  }).length;
+}
+
+async function triggerDownloadFromUrl(filename, rawUrl) {
+  const url = String(rawUrl || "").trim();
+  if (!url) {
+    throw new Error("无效下载地址");
+  }
+
+  if (url.startsWith("data:")) {
+    triggerDownloadFromDataUrl(filename, url);
+    return;
+  }
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objectUrl);
+    return;
+  } catch {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.target = "_blank";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+}
+
+function inferVideoExtension(mimeType, rawUrl) {
+  const safeMimeType = String(mimeType || "")
+    .trim()
+    .toLowerCase();
+  if (safeMimeType.includes("webm")) return "webm";
+  if (safeMimeType.includes("quicktime")) return "mov";
+  if (safeMimeType.includes("mp4")) return "mp4";
+
+  const value = String(rawUrl || "").trim();
+  if (value.startsWith("data:video/webm")) return "webm";
+  if (value.startsWith("data:video/quicktime")) return "mov";
+
+  try {
+    const pathname = new URL(value).pathname.toLowerCase();
+    if (pathname.endsWith(".webm")) return "webm";
+    if (pathname.endsWith(".mov")) return "mov";
+    if (pathname.endsWith(".mp4")) return "mp4";
+  } catch {
+    // noop
+  }
+  return "mp4";
+}
+
+function isRenderableVideoUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return false;
+  if (value.startsWith("data:video/")) {
+    return value.includes(",") && value.length > 64;
+  }
+  return value.startsWith("http://") || value.startsWith("https://");
+}
+
 function formatTaskStageSummary(task) {
   const stageText = String(task?.stageText || "").trim();
   const progress = Number(task?.progress);
@@ -1773,9 +4009,28 @@ function formatTaskStageSummary(task) {
   return `任务进度 ${safeProgress}%`;
 }
 
+function formatReferenceImagePolicyLabel(value) {
+  const safe = normalizeReferenceImagePolicyValue(value);
+  if (safe === "all") return "全部图参";
+  if (safe === "keyframes") return "关键帧";
+  if (safe === "first_last") return "首尾帧";
+  return "仅文本";
+}
+
 function normalizeQueueFilter(value) {
   const mode = String(value || "").toLowerCase();
   return QUEUE_FILTER_MODES[mode] ? mode : "all";
+}
+
+function normalizeWorkflowHubTab(value) {
+  const mode = String(value || "").toLowerCase();
+  return WORKFLOW_HUB_TABS[mode] ? mode : "batch";
+}
+
+function buildStudioPath(projectId, chapterId) {
+  return `/projects/${encodeURIComponent(String(projectId || ""))}/chapters/${encodeURIComponent(
+    String(chapterId || "")
+  )}/studio`;
 }
 
 function SummaryChevron() {

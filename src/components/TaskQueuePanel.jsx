@@ -15,6 +15,8 @@ const TYPE_LABEL_MAP = {
   remix: "Remix",
   batch: "Batch",
   image: "Image",
+  video: "Video",
+  "video-sequence": "Sequence",
 };
 
 const FILTER_OPTIONS = {
@@ -23,7 +25,7 @@ const FILTER_OPTIONS = {
   failed: true,
 };
 
-export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, filterMode = "all", onFilterChange }) {
+export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, onRetry, filterMode = "all", onFilterChange }) {
   const safeFilterMode = FILTER_OPTIONS[filterMode] ? filterMode : "all";
 
   const filteredRuns = useMemo(() => {
@@ -94,7 +96,9 @@ export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, filterMode = "
             return (
               <li
                 key={run.id}
-                className="card-luxe grid grid-cols-[1fr_auto] items-start gap-3 p-3"
+                className={`card-luxe grid grid-cols-[1fr_auto] items-start gap-3 p-3 ${
+                  run.type === "image" ? "border-l-2 border-l-atelier-accent/55 pl-3" : ""
+                }`}
                 style={{ animationDelay: `${Math.min(idx * 45, 260)}ms` }}
               >
                 <div className="min-w-0">
@@ -107,8 +111,16 @@ export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, filterMode = "
                     {duration && <span className="text-xs text-atelier-subtle">Duration {duration}</span>}
                     <span className="text-xs text-atelier-subtle">{progress}%</span>
                   </div>
+                  {run.sourceLabel && (
+                    <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-atelier-subtle">
+                      来源分镜 · {run.sourceLabel}
+                    </p>
+                  )}
                   {stageText && <p className="mt-1 text-xs text-atelier-subtle">{stageText}</p>}
                   <p className="mt-1 truncate text-sm text-atelier-fg">{run.title}</p>
+                  {run?.sequenceMetaText ? (
+                    <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-atelier-subtle">{run.sequenceMetaText}</p>
+                  ) : null}
                   <div className="mt-2 h-1.5 w-full overflow-hidden border border-atelier-fg/10 bg-white/40">
                     <span
                       className="block h-full bg-atelier-accent transition-[width] duration-700 ease-out"
@@ -128,6 +140,15 @@ export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, filterMode = "
                       打开结果
                     </button>
                   )}
+                  {run.status === "error" && run.retryPayload ? (
+                    <button
+                      type="button"
+                      className="underline-reveal text-[10px] uppercase tracking-[0.2em] text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent"
+                      onClick={() => onRetry?.(run.id)}
+                    >
+                      重试
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="underline-reveal text-[10px] uppercase tracking-[0.2em] text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent"

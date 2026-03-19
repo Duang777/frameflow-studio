@@ -7,6 +7,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<LandingPage />} />
       <Route path="/studio" element={<StudioPage />} />
+      <Route path="/projects/:projectId/chapters/:chapterId/studio" element={<StudioPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

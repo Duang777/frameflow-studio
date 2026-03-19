@@ -68,6 +68,24 @@ const listStmt = db.prepare(`
   LIMIT ?
 `);
 
+const getByIdStmt = db.prepare(`
+  SELECT
+    id,
+    created_at,
+    updated_at,
+    seed_text,
+    image_name,
+    mode_id,
+    mode_name,
+    style_bias,
+    style_name,
+    item_count,
+    ideas_json
+  FROM history_entries
+  WHERE id = ?
+  LIMIT 1
+`);
+
 const updateIdeasStmt = db.prepare(`
   UPDATE history_entries
   SET
@@ -83,6 +101,15 @@ const clearStmt = db.prepare(`DELETE FROM history_entries`);
 export function listHistory(limit = 30) {
   const safeLimit = Math.max(1, Math.min(200, Number(limit) || 30));
   return listStmt.all(safeLimit).map(mapRow);
+}
+
+export function getHistoryById(id) {
+  const safeId = String(id || "").trim();
+  if (!safeId) {
+    return null;
+  }
+  const row = getByIdStmt.get(safeId);
+  return row ? mapRow(row) : null;
 }
 
 export function upsertHistory(entry) {
@@ -133,6 +160,62 @@ export function updateHistoryIdeas(id, ideas) {
   return Number(result?.changes || 0) > 0;
 }
 
+export function updateHistoryIdeaImage(id, index, generatedImage) {
+  const safeId = String(id || "").trim();
+  const safeIndex = Number(index);
+  if (!safeId || !Number.isInteger(safeIndex) || safeIndex < 0) {
+    return false;
+  }
+
+  const row = getByIdStmt.get(safeId);
+  if (!row) {
+    return false;
+  }
+
+  const ideas = parseIdeas(row.ideas_json);
+  if (safeIndex >= ideas.length) {
+    return false;
+  }
+
+  const baseIdea = ideas[safeIndex] && typeof ideas[safeIndex] === "object" ? ideas[safeIndex] : {};
+  ideas[safeIndex] = {
+    ...baseIdea,
+    generatedImage: sanitizeGeneratedImage(generatedImage),
+  };
+
+  const now = Date.now();
+  const result = updateIdeasStmt.run(now, ideas.length, JSON.stringify(ideas), safeId);
+  return Number(result?.changes || 0) > 0;
+}
+
+export function updateHistoryIdeaVideo(id, index, generatedVideo) {
+  const safeId = String(id || "").trim();
+  const safeIndex = Number(index);
+  if (!safeId || !Number.isInteger(safeIndex) || safeIndex < 0) {
+    return false;
+  }
+
+  const row = getByIdStmt.get(safeId);
+  if (!row) {
+    return false;
+  }
+
+  const ideas = parseIdeas(row.ideas_json);
+  if (safeIndex >= ideas.length) {
+    return false;
+  }
+
+  const baseIdea = ideas[safeIndex] && typeof ideas[safeIndex] === "object" ? ideas[safeIndex] : {};
+  ideas[safeIndex] = {
+    ...baseIdea,
+    generatedVideo: sanitizeGeneratedVideo(generatedVideo),
+  };
+
+  const now = Date.now();
+  const result = updateIdeasStmt.run(now, ideas.length, JSON.stringify(ideas), safeId);
+  return Number(result?.changes || 0) > 0;
+}
+
 export function removeHistory(id) {
   const safeId = String(id || "").trim();
   if (!safeId) {
@@ -179,6 +262,30 @@ function parseIdeas(raw) {
 
 function sanitizeIdeas(input) {
   return Array.isArray(input) ? input : [];
+}
+
+function sanitizeGeneratedImage(input) {
+  const value = input && typeof input === "object" ? input : {};
+  return {
+    status: String(value.status || "").trim() || "success",
+    url: String(value.url || "").trim(),
+    error: String(value.error || "").trim(),
+    model: String(value.model || "").trim(),
+  };
+}
+
+function sanitizeGeneratedVideo(input) {
+  const value = input && typeof input === "object" ? input : {};
+  const durationSeconds = Number(value.durationSeconds);
+  return {
+    status: String(value.status || "").trim() || "success",
+    url: String(value.url || "").trim(),
+    error: String(value.error || "").trim(),
+    model: String(value.model || "").trim(),
+    mimeType: String(value.mimeType || "").trim(),
+    prompt: String(value.prompt || "").trim(),
+    durationSeconds: Number.isFinite(durationSeconds) && durationSeconds > 0 ? Math.round(durationSeconds) : 0,
+  };
 }
 
 function toSafeTime(input, fallback = Date.now()) {

@@ -35,6 +35,157 @@ body {
     @apply border-y border-atelier-fg/15 bg-atelier-muted/20 px-3 py-3 md:px-4;
   }
 
+  .workspace-shell {
+    @apply border border-atelier-fg/15 bg-white/45 px-3 py-4 shadow-[0_6px_20px_rgba(0,0,0,0.035)] md:px-5 md:py-5;
+  }
+
+  .workspace-open-button {
+    @apply min-h-11 border border-atelier-fg bg-atelier-fg px-5 text-[10px] uppercase tracking-[0.22em] text-atelier-inverse shadow-atelier-button transition-[box-shadow,border-color] duration-500 hover:border-atelier-accent hover:shadow-atelier-button-hover disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .workspace-modal-backdrop {
+    background: rgba(15, 14, 12, 0.52);
+    backdrop-filter: blur(2px);
+  }
+
+  .workspace-modal-panel {
+    @apply border border-atelier-fg/25 bg-atelier-bg shadow-[0_20px_60px_rgba(0,0,0,0.2)];
+  }
+
+  .composer-modal-backdrop {
+    background: rgba(15, 14, 12, 0.58);
+    backdrop-filter: blur(2px);
+  }
+
+  .composer-modal-panel {
+    @apply border border-atelier-fg/25 bg-atelier-bg shadow-[0_24px_70px_rgba(0,0,0,0.26)];
+  }
+
+  .workflow-hub-backdrop {
+    background: rgba(15, 14, 12, 0.56);
+    backdrop-filter: blur(2px);
+  }
+
+  .workflow-hub-panel {
+    @apply border border-atelier-fg/25 bg-atelier-bg shadow-[0_24px_70px_rgba(0,0,0,0.22)];
+  }
+
+  .workflow-hub-header {
+    @apply flex flex-wrap items-start justify-between gap-4 border-b border-atelier-fg/15 px-4 py-4 md:px-7 md:py-5;
+  }
+
+  .workflow-hub-tabs {
+    @apply flex flex-wrap gap-2 border-b border-atelier-fg/10 px-4 py-3 md:px-7;
+  }
+
+  .workflow-hub-body {
+    @apply flex-1 overflow-auto px-4 py-3 md:px-7 md:py-5;
+  }
+
+  .composer-modal-header {
+    @apply flex flex-wrap items-start justify-between gap-4 border-b border-atelier-fg/15 px-5 py-4 md:px-8 md:py-6;
+  }
+
+  .composer-modal-body {
+    @apply max-h-[58vh] overflow-auto px-5 py-4 md:px-8 md:py-6;
+  }
+
+  .composer-modal-history {
+    @apply max-h-[34vh] overflow-auto;
+  }
+
+  .workspace-modal-header {
+    @apply flex flex-wrap items-start justify-between gap-4 border-b border-atelier-fg/15 px-5 py-4 md:px-8 md:py-6;
+  }
+
+  .workspace-modal-close {
+    @apply min-h-10 border border-atelier-fg/35 px-4 text-[10px] uppercase tracking-[0.2em] text-atelier-subtle transition-colors duration-500 hover:border-atelier-accent hover:text-atelier-accent;
+  }
+
+  .workspace-tab-row {
+    @apply flex flex-wrap gap-2 border-b border-atelier-fg/10 px-5 py-3 md:px-8;
+  }
+
+  .workspace-tab-button {
+    @apply min-h-10 border border-atelier-fg/25 bg-transparent px-4 text-[10px] uppercase tracking-[0.2em] text-atelier-subtle transition-colors duration-500 hover:border-atelier-accent hover:text-atelier-accent;
+  }
+
+  .workspace-tab-button-active {
+    @apply border-atelier-fg bg-atelier-fg text-atelier-inverse;
+  }
+
+  .workspace-modal-body {
+    @apply max-h-[70vh] overflow-auto px-5 py-4 md:px-8 md:py-6;
+  }
+
+  .workspace-modal-block {
+    @apply border border-atelier-fg/15 bg-white/50 p-4 shadow-[0_8px_22px_rgba(0,0,0,0.04)] md:p-5;
+  }
+
+  .workspace-entity-list {
+    @apply max-h-72 space-y-2 overflow-auto border border-atelier-fg/10 bg-atelier-muted/10 p-2;
+  }
+
+  .workspace-entity-item {
+    @apply flex w-full flex-col items-start gap-1 border border-atelier-fg/10 bg-white/60 px-3 py-2 text-left transition-colors duration-500 hover:border-atelier-accent/45 hover:bg-white;
+  }
+
+  .workspace-entity-item-active {
+    @apply border-atelier-fg/40 bg-white shadow-[0_4px_14px_rgba(0,0,0,0.05)];
+  }
+
+  .workspace-entity-title {
+    @apply text-sm text-atelier-fg;
+  }
+
+  .workspace-entity-meta {
+    @apply text-[10px] uppercase tracking-[0.16em] text-atelier-subtle;
+  }
+
+  .workspace-entity-empty {
+    @apply px-2 py-3 text-xs text-atelier-subtle;
+  }
+
+  .workspace-disclosure {
+    @apply border border-atelier-fg/15 bg-atelier-bg/70 transition-colors duration-700;
+  }
+
+  .workspace-disclosure[open] {
+    @apply border-atelier-fg/30 bg-white/60;
+  }
+
+  .workspace-disclosure-summary {
+    @apply flex cursor-pointer items-center justify-between gap-3 px-3 py-3 transition-colors duration-500 hover:bg-atelier-muted/25;
+  }
+
+  .workspace-disclosure-body {
+    @apply border-t border-atelier-fg/10 bg-white/35 px-3 py-3;
+  }
+
+  .workspace-inline-field {
+    @apply mt-3 grid gap-1 first:mt-0;
+  }
+
+  .workspace-inline-label {
+    @apply text-[10px] uppercase tracking-editorial text-atelier-subtle;
+  }
+
+  .workspace-text-input {
+    @apply h-10 border-b border-atelier-fg/20 bg-transparent px-0 text-sm text-atelier-fg outline-none transition-colors duration-500 placeholder:font-display placeholder:italic placeholder:text-atelier-subtle focus:border-atelier-accent disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  .workspace-action-row {
+    @apply mt-4 flex flex-wrap gap-2 border-t border-atelier-fg/10 pt-3;
+  }
+
+  .workspace-action-button {
+    @apply min-h-10 border border-atelier-fg/40 bg-transparent px-3 text-[10px] uppercase tracking-[0.2em] text-atelier-fg transition-colors duration-500 hover:border-atelier-accent hover:text-atelier-accent disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  .workspace-action-button-danger {
+    @apply border-rose-900/40 text-rose-900 hover:border-rose-700 hover:text-rose-700;
+  }
+
   .result-empty {
     @apply border border-atelier-fg/10 bg-white/40 px-4 py-5 md:px-6 md:py-7;
   }
@@ -226,6 +377,14 @@ details[open] .details-chevron {
 @media (max-width: 1024px) {
   .gridline-edge {
     display: none;
+  }
+
+  .workflow-hub-modal {
+    @apply px-0 py-0;
+  }
+
+  .workflow-hub-panel {
+    @apply h-screen max-h-none rounded-none border-x-0 border-y-0;
   }
 }
 

@@ -1,47 +1,74 @@
-﻿# Storyboard Atelier (React + Tailwind + Gemini Proxy)
+﻿# Frameflow Studio
 
-这是一个全栈分镜拓展工具，包含：
+<p align="center">
+  <a href="https://github.com/Duang777/frameflow-studio/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-1A1A1A.svg"></a>
+  <a href="https://github.com/Duang777/frameflow-studio/actions/workflows/ci.yml"><img alt="Build" src="https://github.com/Duang777/frameflow-studio/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-D4AF37.svg">
+</p>
 
-- 前端：React + Tailwind（Luxury / Editorial 设计系统）
-- 后端：Express 代理 Gemini API（保护 API Key）
-- 历史持久化：服务端 SQLite（包含分镜图 data URL）
+<p align="center">
+  <strong>From one seed idea to production-ready storyboards, visuals, and sequence videos.</strong><br/>
+  <strong>从一句镜头种子，快速推进到可执行分镜、分镜图与串联成片。</strong>
+</p>
+
+---
+
+## 中文介绍
+
+### 项目定位
+
+**Frameflow Studio** 是一个面向导演、编剧、广告创意和短视频团队的分镜工作台。  
+它强调“创意到执行”的完整链路，而不是单点文本生成：
+
+- 生成分镜：文本/图片 seed 一键拓展多条可拍分镜
+- 继续生产：单条出图、单条视频、多条串联成片
+- 组织与复盘：项目/章节管理、任务队列、历史恢复、批量工作流
+- 长期可维护：前后端分离 + API 代理 + SQLite 持久化
+
+### 界面预览
+
+> 请将你提供的两张截图放到：
+> - `docs/screenshots/main-entrance.png`
+> - `docs/screenshots/studio-overview.png`
+
+#### 主入口页
+
+![Frameflow Main Entrance](docs/screenshots/main-entrance.png)
+
+#### Studio 工作台
+
+![Frameflow Studio Workspace](docs/screenshots/studio-overview.png)
+
+### 核心能力
+
+- 分镜拓展：`6/8/10` 条可配置输出
 - 模式库：广告片 / 剧情片 / 短视频 / B-roll
-- 批量工作流：多 seed 一次性生成
+- 单条再生成（Remix）与快速迭代
+- 单分镜生图 / 生视频（支持失败重试）
+- 串联成片（Video Composer）：
+  - 镜头顺序编辑、恢复原顺序
+  - 图像参与策略 `all | keyframes | first_last | text_only`
+  - 配置摘要、历史一键套用、失败重试
+- Workflow Hub 弹窗中心：`Batch / Queue / History / Advanced`
+- URL 状态记忆：队列筛选与 Hub Tab 刷新后保留
+- 项目级持久化：`sequence_videos` 按项目/章节存储
 
-## 功能清单
+### 技术架构
 
-- 单条生成：文本 + 图片输入，生成 6/8/10 条分镜
-- 单条再生成：对某条结果快速 remix
-- 分镜出图：每条分镜可单独生成参考画面并下载
-- 收藏与历史：本地收藏、历史恢复、删除、清空
-- 结果区进阶交互：多选、范围选择（Shift）、批量复制/收藏/删除
-- 结果筛选：全部 / 仅收藏 / 未收藏
-- 任务队列：展示拓展/再生成/批量任务的状态、耗时和摘要
-- 真实阶段文案：排队中 / 请求模型 / 解析结果 / 完成
-- 任务进度条：按轮询进度实时更新（批量任务显示序号阶段）
-- 任务队列筛选：全部 / 运行中 / 失败
-- 批量结果快捷操作：复制 seed、载入画布、复制结果、导出
-- 参数编辑器：Temperature / Top P 滑杆与数值联动
-- 双模型配置：文本生成模型与出图模型可独立配置
-- 导出：Markdown / JSON
-- 批量生成：每行一个 seed，后端顺序处理并回传每条结果
-- 后端代理：前端不再暴露 `GEMINI_API_KEY`
+- 前端：React 19 + Vite + Tailwind CSS
+- 后端：Node.js + Express（代理模型请求，保护 API Key）
+- 存储：SQLite（`server/data/storyboard.sqlite`）
 
-## 项目结构
+核心数据表：
+- `projects`
+- `chapters`
+- `shots`
+- `shot_images`
+- `shot_videos`
+- `sequence_videos`
+- `history_entries`
 
-- `src/`：React 前端
-  - `components/`：UI 组件
-  - `lib/`：模式、导出、存储等工具
-  - `services/`：API 客户端与业务接口封装
-- `server/`：Express API 代理
-  - `index.js`：接口入口
-  - `historyStore.js`：SQLite 历史存储
-  - `modes.js`：模式库与风格映射
-  - `response.js`：统一响应结构工具
-  - `taskManager.js`：内存任务管理（创建/查询/取消）
-  - `utils.js`：模型输出解析与补全
-
-## 本地启动
+### 快速开始
 
 1. 安装依赖
 
@@ -49,118 +76,136 @@
 npm install
 ```
 
-2. 配置环境变量
+2. 复制环境变量
 
 ```bash
 cp .env.example .env
 ```
 
-然后在 `.env` 中填写真实 `GEMINI_API_KEY`。
-建议同时配置：
+Windows PowerShell：
 
-```env
-GEMINI_TEXT_MODEL=gemini-2.5-flash-image
-GEMINI_IMAGE_MODEL=gemini-3.1-flash-image-preview
-GEMINI_IMAGE_TIMEOUT_MS=90000
+```powershell
+Copy-Item .env.example .env
 ```
 
-如需接入第三方 Gemini 网关，可额外设置：
+3. 最小配置
 
 ```env
-GEMINI_ENDPOINT=https://www.dmxapi.cn/v1beta/models/{model}:generateContent
-GEMINI_API_KEY_MODE=auto
-GEMINI_KEY_HEADER=x-api-key
+GEMINI_API_KEY=your_api_key
 ```
 
-- `GEMINI_API_KEY_MODE` 支持：`auto` / `query` / `bearer` / `header` / `none`
-- 默认 `auto` 会根据 endpoint 与 key 形态自动推断（第三方 `sk-` key 默认走 `bearer`）
-
-3. 启动开发环境（前后端一起）
+4. 启动
 
 ```bash
 npm run dev
 ```
 
+默认地址：
 - 前端：`http://localhost:5173`
 - 后端：`http://localhost:8787`
-- 路由入口：
-  - `http://localhost:5173/` 主页面（Landing）
-  - `http://localhost:5173/studio` 分镜工作台（Studio）
+- Studio：`http://localhost:5173/studio`
 
-4. 生产构建前端
+5. 健康检查
 
-```bash
-npm run build
+访问 `http://localhost:8787/api/health`
+
+---
+
+## English
+
+### Overview
+
+**Frameflow Studio** is an editorial-grade storyboard production workspace for creators who need more than text generation.
+
+It helps teams move from idea to execution:
+
+- Expand a text/image seed into structured shot candidates
+- Generate per-shot images and videos
+- Compose multiple shots into one continuous sequence video
+- Operate with project/chapter organization, queue tracking, and recoverable history
+
+### Key Features
+
+- Storyboard expansion with configurable shot count (`6/8/10`)
+- Preset mode library (Ad / Drama / Short Video / B-roll)
+- Shot-level remix and rapid iteration
+- Shot image and shot video generation with retry
+- Sequence Video Composer:
+  - shot ordering, remove, restore original order
+  - reference image policy (`all`, `keyframes`, `first_last`, `text_only`)
+  - reusable config presets and history replay
+- Workflow Hub modal (`Batch / Queue / History / Advanced`)
+- URL state memory for queue filter and hub tab
+- Project-scoped persistence for sequence video history (`sequence_videos`)
+
+### Tech Stack
+
+- Frontend: React 19 + Vite + Tailwind CSS
+- Backend: Node.js + Express API proxy
+- Storage: SQLite
+
+### API Highlights
+
+- `GET /api/health`
+- `GET /api/modes`
+- `GET /api/workspace/bootstrap`
+- `POST /api/tasks/expand`
+- `POST /api/tasks/generate-image`
+- `POST /api/tasks/generate-video`
+- `GET /api/projects/:projectId/chapters/:chapterId/sequence-videos`
+- `POST /api/projects/:projectId/chapters/:chapterId/sequence-videos`
+- `DELETE /api/projects/:projectId/chapters/:chapterId/sequence-videos/:id`
+
+---
+
+## Repository Structure
+
+```text
+.
+├─ src/
+│  ├─ components/
+│  ├─ pages/
+│  ├─ services/
+│  └─ lib/
+├─ server/
+│  ├─ index.js
+│  ├─ taskManager.js
+│  ├─ historyStore.js
+│  ├─ projectStore.js
+│  ├─ modes.js
+│  └─ utils.js
+├─ docs/
+│  └─ screenshots/
+├─ .github/
+│  └─ workflows/
+│     └─ ci.yml
+├─ .env.example
+├─ LICENSE
+└─ README.md
 ```
 
-## API 说明
+---
 
-- `GET /api/health`：健康检查
-- `GET /api/modes`：模式库列表
-- `GET /api/history`：读取历史记录（SQLite）
-- `POST /api/history`：保存/覆盖一条历史记录
-- `PATCH /api/history/:id/ideas`：更新历史记录中的 ideas（含生成图）
-- `DELETE /api/history/:id`：删除一条历史记录
-- `DELETE /api/history`：清空历史记录
-- `POST /api/tasks/expand`：创建单条拓展任务（异步）
-- `POST /api/tasks/batch-expand`：创建批量拓展任务（异步）
-- `POST /api/tasks/generate-image`：创建单条分镜出图任务（异步）
-- `GET /api/tasks/:taskId`：查询任务状态与结果
-- `POST /api/tasks/:taskId/cancel`：取消任务
-- `POST /api/expand`：单条生成
-- `POST /api/batch-expand`：批量生成
-- `POST /api/generate-image`：单条分镜出图
+## Scripts
 
-### 统一响应结构
+- `npm run dev` : run client + server in development
+- `npm run dev:client` : run frontend only
+- `npm run dev:server` : run backend only
+- `npm run build` : build frontend
+- `npm run preview` : preview build output
+- `npm run start` : start backend in production mode
 
-所有接口统一返回：
+---
 
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {}
-}
-```
+## Roadmap
 
-- 成功：`HTTP 200 / 202`，`code = 0`
-- 失败：`HTTP >= 400`，`code = HTTP 状态码`，错误信息在 `message`
+- Redis-backed queue for multi-instance reliability
+- Team collaboration and user-level permissions
+- Object storage integration for generated media assets
+- Richer storyboard grammar and reusable prompt packs
 
-### 任务状态字段
+---
 
-- `pending`：已创建，等待执行
-- `running`：执行中
-- `success`：执行成功，可从 `data.task.result` 读取结果
-- `error`：执行失败，可从 `data.task.error` 读取原因
-- `cancelled`：已取消
+## License
 
-### 快捷键
-
-- `Ctrl/Cmd + Enter`：提交生成
-- `Ctrl/Cmd + A`：全选当前筛选结果
-- `Ctrl/Cmd + C`：复制当前所选
-- `Esc`：清除选择
-- `Delete / Backspace`：删除所选
-- `← / →`：在可见结果中切换选中项
-
-### `/api/expand` 请求示例
-
-```json
-{
-  "seedText": "雨夜街角，角色停下脚步",
-  "imageDataUrl": "data:image/png;base64,...",
-  "modeId": "drama",
-  "styleBias": "cinematic",
-  "ideaCount": 8,
-  "temperature": 1,
-  "topP": 0.9,
-  "model": "gemini-2.5-flash-image",
-  "promptTemplate": "..."
-}
-```
-
-## 维护建议
-
-- 统一修改设计 token：`tailwind.config.js`
-- 增加新模式：`src/lib/modes.js` 与 `server/modes.js`
-- 若要多人协作部署：在服务端增加鉴权、速率限制与日志追踪
+MIT License. See [LICENSE](LICENSE).

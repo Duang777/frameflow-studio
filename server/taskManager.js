@@ -1,4 +1,4 @@
-const TASKS = new Map();
+﻿const TASKS = new Map();
 const MAX_TASKS = 200;
 
 export function createTask({ type, payload, run }) {
