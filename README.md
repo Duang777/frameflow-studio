@@ -11,6 +11,18 @@
 </p>
 
 <p align="center">
+  <strong>Value Proposition：</strong>让创意团队把「灵感描述」稳定转成「可执行镜头方案」。
+</p>
+
+<table align="center">
+  <tr>
+    <td align="center"><strong>6 / 8 / 10</strong><br/>可配置分镜拓展</td>
+    <td align="center"><strong>4 Tabs</strong><br/>Workflow Hub 一站式流转</td>
+    <td align="center"><strong>SQLite</strong><br/>项目级历史持久化与回放</td>
+  </tr>
+</table>
+
+<p align="center">
   中文 | <a href="README.en.md">English</a>
 </p>
 

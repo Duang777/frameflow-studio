@@ -92,6 +92,12 @@ const FILTER_MODES = [
   { id: "favorites", label: "仅收藏" },
   { id: "unstarred", label: "未收藏" },
 ];
+const IDEA_MEDIA_FILTERS = [
+  { id: "all", label: "全部媒体" },
+  { id: "with_image", label: "有图片" },
+  { id: "with_video", label: "有视频" },
+  { id: "no_media", label: "无媒体" },
+];
 
 const MAX_TASK_RUNS = 20;
 const FINAL_TASK_STATUSES = ["success", "error", "cancelled"];
@@ -137,6 +143,8 @@ export default function StudioPage() {
   );
   const [sequenceVideoHistory, setSequenceVideoHistory] = useState([]);
   const [filterMode, setFilterMode] = useState("all");
+  const [ideaSearchText, setIdeaSearchText] = useState("");
+  const [ideaMediaFilter, setIdeaMediaFilter] = useState("all");
   const [activeHistoryId, setActiveHistoryId] = useState(null);
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
   const [projectItems, setProjectItems] = useState([]);
@@ -239,12 +247,41 @@ export default function StudioPage() {
   );
 
   const visibleEntries = useMemo(() => {
+    const keyword = String(ideaSearchText || "")
+      .trim()
+      .toLowerCase();
+    const mediaFilter = normalizeIdeaMediaFilter(ideaMediaFilter);
     return ideaEntries.filter((entry) => {
       if (filterMode === "favorites") return entry.favorite;
       if (filterMode === "unstarred") return !entry.favorite;
+
+      const idea = entry.idea && typeof entry.idea === "object" ? entry.idea : {};
+      if (keyword) {
+        const target = [
+          idea.title,
+          idea.scene,
+          idea.camera,
+          idea.mood,
+          idea.twist,
+          idea.seedIdea,
+        ]
+          .map((item) => String(item || ""))
+          .join(" ")
+          .toLowerCase();
+        if (!target.includes(keyword)) {
+          return false;
+        }
+      }
+
+      const hasImage = isIdeaImageReady(idea);
+      const hasVideo = isIdeaVideoReady(idea);
+      if (mediaFilter === "with_image" && !hasImage) return false;
+      if (mediaFilter === "with_video" && !hasVideo) return false;
+      if (mediaFilter === "no_media" && (hasImage || hasVideo)) return false;
+
       return true;
     });
-  }, [ideaEntries, filterMode]);
+  }, [ideaEntries, filterMode, ideaMediaFilter, ideaSearchText]);
 
   const visibleIndexes = useMemo(() => visibleEntries.map((entry) => entry.index), [visibleEntries]);
   const selectedVisibleCount = useMemo(
@@ -1065,6 +1102,26 @@ export default function StudioPage() {
       return;
     }
 
+    if (run.retryPayload.kind === "idea-image") {
+      const ideaIndex = Number(run.retryPayload.ideaIndex);
+      if (!Number.isInteger(ideaIndex) || ideaIndex < 0 || ideaIndex >= ideas.length) {
+        updateStatus("error", "无法重试", "目标分镜不存在或已被删除。");
+        return;
+      }
+      await generateIdeaImage(ideaIndex);
+      return;
+    }
+
+    if (run.retryPayload.kind === "idea-video") {
+      const ideaIndex = Number(run.retryPayload.ideaIndex);
+      if (!Number.isInteger(ideaIndex) || ideaIndex < 0 || ideaIndex >= ideas.length) {
+        updateStatus("error", "无法重试", "目标分镜不存在或已被删除。");
+        return;
+      }
+      await generateIdeaVideo(ideaIndex);
+      return;
+    }
+
     updateStatus("error", "暂不支持", "当前仅支持串联视频任务重试。");
   };
 
@@ -1730,6 +1787,10 @@ export default function StudioPage() {
       sourceKey: sourceMeta.historyId ? `history:${sourceMeta.historyId}` : `canvas:${settings.modeId}`,
       sourceLabel: sourceMeta.sourceLabel,
       sourceRunId: sourceMeta.sourceRunId,
+      retryPayload: {
+        kind: "idea-image",
+        ideaIndex: index,
+      },
     });
 
     patchIdeaImageState(index, {
@@ -1923,6 +1984,10 @@ export default function StudioPage() {
       sourceKey: sourceMeta.historyId ? `history:${sourceMeta.historyId}` : `canvas:${settings.modeId}`,
       sourceLabel: sourceMeta.sourceLabel,
       sourceRunId: sourceMeta.sourceRunId,
+      retryPayload: {
+        kind: "idea-video",
+        ideaIndex: index,
+      },
     });
 
     patchIdeaVideoState(index, {
@@ -3684,6 +3749,31 @@ export default function StudioPage() {
             <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
               已选 {selectedVisibleCount}
             </span>
+            <span className="mx-1 h-4 w-px bg-atelier-fg/20" aria-hidden="true" />
+            {IDEA_MEDIA_FILTERS.map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                onClick={() => setIdeaMediaFilter(mode.id)}
+                className={`border px-2 py-1 text-[10px] uppercase tracking-[0.18em] transition-colors duration-500 ${
+                  normalizeIdeaMediaFilter(ideaMediaFilter) === mode.id
+                    ? "border-atelier-accent bg-atelier-accent text-atelier-inverse"
+                    : "border-atelier-fg/20 text-atelier-subtle hover:border-atelier-accent hover:text-atelier-accent"
+                }`}
+              >
+                {mode.label}
+              </button>
+            ))}
+            <label className="ml-auto flex min-w-[220px] items-center gap-2 border-b border-atelier-fg/20 px-1 py-1">
+              <span className="text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">检索</span>
+              <input
+                type="text"
+                value={ideaSearchText}
+                onChange={(event) => setIdeaSearchText(event.target.value)}
+                className="w-full bg-transparent text-xs text-atelier-fg outline-none placeholder:italic placeholder:text-atelier-subtle"
+                placeholder="标题 / 场景 / 摄影 / 情绪"
+              />
+            </label>
           </div>
 
           <div className="toolbar-shelf mt-2 flex flex-wrap gap-4">
@@ -4020,6 +4110,23 @@ function formatReferenceImagePolicyLabel(value) {
 function normalizeQueueFilter(value) {
   const mode = String(value || "").toLowerCase();
   return QUEUE_FILTER_MODES[mode] ? mode : "all";
+}
+
+function normalizeIdeaMediaFilter(value) {
+  const mode = String(value || "").toLowerCase();
+  return IDEA_MEDIA_FILTERS.some((item) => item.id === mode) ? mode : "all";
+}
+
+function isIdeaImageReady(idea) {
+  const status = String(idea?.generatedImage?.status || "").trim().toLowerCase();
+  const url = String(idea?.generatedImage?.url || "").trim();
+  return status === "success" && Boolean(url);
+}
+
+function isIdeaVideoReady(idea) {
+  const status = String(idea?.generatedVideo?.status || "").trim().toLowerCase();
+  const url = String(idea?.generatedVideo?.url || "").trim();
+  return status === "success" && Boolean(url);
 }
 
 function normalizeWorkflowHubTab(value) {

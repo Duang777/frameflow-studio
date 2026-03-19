@@ -11,6 +11,18 @@
 </p>
 
 <p align="center">
+  <strong>Value Proposition:</strong> turn abstract ideas into camera-ready storyboard pipelines with reliable iteration.
+</p>
+
+<table align="center">
+  <tr>
+    <td align="center"><strong>6 / 8 / 10</strong><br/>Configurable shot expansion</td>
+    <td align="center"><strong>4 Tabs</strong><br/>Workflow Hub for daily operations</td>
+    <td align="center"><strong>SQLite</strong><br/>Project-scoped persistence & replay</td>
+  </tr>
+</table>
+
+<p align="center">
   <a href="README.md">中文</a> | English
 </p>
 
