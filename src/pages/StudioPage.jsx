@@ -1,16 +1,27 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { EditorialSelect } from "../components/EditorialSelect";
-import { IdeaCard } from "../components/IdeaCard";
-import { ModeLibrary } from "../components/ModeLibrary";
-import { PrimaryButton } from "../components/PrimaryButton";
-import { RangeNumberField } from "../components/RangeNumberField";
-import { StatusBadge } from "../components/StatusBadge";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { VideoComposerModal } from "../components/VideoComposerModal";
 import { WorkflowHubModal } from "../components/WorkflowHubModal";
+import { InputPanel } from "../components/studio/InputPanel";
+import { ResultCanvas } from "../components/studio/ResultCanvas";
+import { StudioHeader } from "../components/studio/StudioHeader";
+import { useTaskQueueState } from "../hooks/useTaskQueueState";
 import { buildIdeaCopyText, downloadText, formatTime, toIdeaMarkdown } from "../lib/formatters";
 import { DEFAULT_PROMPT_TEMPLATE, getModeById, STORYBOARD_MODES, STYLE_BIASES } from "../lib/modes";
 import { useLocalStorageState } from "../lib/storage";
+import {
+  applyReferencePolicyToSequenceIdeas,
+  countSequenceReferenceImages,
+  formatReferenceImagePolicyLabel,
+  formatTaskStageSummary,
+  isIdeaImageReady,
+  isIdeaVideoReady,
+  normalizeIdeaMediaFilter,
+  normalizeQueueFilter,
+  normalizeReferenceImagePolicyValue,
+  normalizeWorkflowHubTab,
+  splitImageReference,
+} from "../lib/studioState";
 import {
   cancelTaskById,
   clearHistoryEntries,
@@ -99,21 +110,9 @@ const IDEA_MEDIA_FILTERS = [
   { id: "no_media", label: "无媒体" },
 ];
 
-const MAX_TASK_RUNS = 20;
 const FINAL_TASK_STATUSES = ["success", "error", "cancelled"];
 const QUEUE_FILTER_QUERY_KEY = "queue";
 const WORKFLOW_HUB_TAB_QUERY_KEY = "hub";
-const QUEUE_FILTER_MODES = {
-  all: true,
-  running: true,
-  failed: true,
-};
-const WORKFLOW_HUB_TABS = {
-  batch: true,
-  queue: true,
-  history: true,
-  advanced: true,
-};
 
 export default function StudioPage() {
   const navigate = useNavigate();
@@ -122,7 +121,7 @@ export default function StudioPage() {
   const [settings, setSettings] = useLocalStorageState("atelier_settings_react", defaultSettings);
   const [history, setHistory] = useState([]);
   const [favorites, setFavorites] = useLocalStorageState("atelier_favorites_react", {});
-  const [taskRuns, setTaskRuns] = useLocalStorageState("atelier_task_runs_react", []);
+  const { taskRuns, startTaskRun, finishTaskRun, patchTaskRun, removeTaskRun, clearTaskRuns } = useTaskQueueState();
 
   const [ideas, setIdeas] = useState([]);
   const [imageState, setImageState] = useState({ dataUrl: "", name: "" });
@@ -216,24 +215,6 @@ export default function StudioPage() {
       { value: "10", label: "10 条" },
     ],
     []
-  );
-
-  const projectSelectOptions = useMemo(
-    () =>
-      projectItems.map((item) => ({
-        value: item.id,
-        label: formatProjectOptionLabel(item),
-      })),
-    [projectItems]
-  );
-
-  const chapterSelectOptions = useMemo(
-    () =>
-      chapterItems.map((item) => ({
-        value: item.id,
-        label: formatChapterOptionLabel(item),
-      })),
-    [chapterItems]
   );
 
   const ideaEntries = useMemo(
@@ -1011,52 +992,6 @@ export default function StudioPage() {
     }
   };
 
-  const startTaskRun = ({ type, title, summary, ...meta }) => {
-    const id = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-    const startedAt = Date.now();
-    const item = {
-      id,
-      type,
-      title,
-      status: "pending",
-      summary: summary || "排队中...",
-      progress: 0,
-      stageText: "排队中",
-      startedAt,
-      finishedAt: null,
-      durationMs: null,
-      ...meta,
-    };
-    setTaskRuns((prev) => [item, ...prev].slice(0, MAX_TASK_RUNS));
-    return id;
-  };
-
-  const finishTaskRun = (id, patch) => {
-    const endedAt = Date.now();
-    setTaskRuns((prev) =>
-      prev.map((item) => {
-        if (item.id !== id) return item;
-        const merged = { ...item, ...patch };
-        const derivedProgress =
-          typeof merged.progress === "number"
-            ? merged.progress
-            : merged.status === "success"
-            ? 100
-            : item.progress;
-        return {
-          ...merged,
-          progress: derivedProgress,
-          finishedAt: endedAt,
-          durationMs: Math.max(0, endedAt - Number(item.startedAt || endedAt)),
-        };
-      })
-    );
-  };
-
-  const patchTaskRun = (id, patch) => {
-    setTaskRuns((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
-  };
-
   const waitForTaskCompletion = async (taskId, onTick) => {
     for (let attempt = 0; attempt < 400; attempt += 1) {
       const data = await getTaskStatus(taskId);
@@ -1079,8 +1014,6 @@ export default function StudioPage() {
     throw new Error("任务轮询超时，请重试。");
   };
 
-  const removeTaskRun = (id) => setTaskRuns((prev) => prev.filter((item) => item.id !== id));
-  const clearTaskRuns = () => setTaskRuns([]);
   const retryTaskRunFromQueue = async (id) => {
     const safeId = String(id || "").trim();
     if (!safeId) {
@@ -1472,7 +1405,7 @@ export default function StudioPage() {
 
       const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
         if (task.status === "running" || task.status === "pending") {
-          const stageSummary = formatTaskStageSummary(task);
+          const stageSummary = String(task?.summary || formatTaskStageSummary(task));
           patchTaskRun(taskId, {
             status: task.status,
             progress: Number(task.progress) || 0,
@@ -1827,7 +1760,7 @@ export default function StudioPage() {
 
       const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
         if (task.status === "running" || task.status === "pending") {
-          const stageSummary = formatTaskStageSummary(task);
+          const stageSummary = String(task?.summary || formatTaskStageSummary(task));
           patchTaskRun(taskId, {
             status: task.status,
             progress: Number(task.progress) || 0,
@@ -2025,7 +1958,7 @@ export default function StudioPage() {
 
       const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
         if (task.status === "running" || task.status === "pending") {
-          const stageSummary = formatTaskStageSummary(task);
+          const stageSummary = String(task?.summary || formatTaskStageSummary(task));
           patchTaskRun(taskId, {
             status: task.status,
             progress: Number(task.progress) || 0,
@@ -2327,7 +2260,7 @@ export default function StudioPage() {
 
       const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
         if (task.status === "running" || task.status === "pending") {
-          const stageSummary = formatTaskStageSummary(task);
+          const stageSummary = String(task?.summary || formatTaskStageSummary(task));
           patchTaskRun(taskId, {
             status: task.status,
             progress: Number(task.progress) || 0,
@@ -2566,7 +2499,7 @@ export default function StudioPage() {
 
       const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
         if (task.status === "running" || task.status === "pending") {
-          const stageSummary = formatTaskStageSummary(task);
+          const stageSummary = String(task?.summary || formatTaskStageSummary(task));
           patchTaskRun(taskId, {
             status: task.status,
             progress: Number(task.progress) || 0,
@@ -2820,77 +2753,6 @@ export default function StudioPage() {
     updateStatus("idle", "已清除选择", "当前没有选中分镜。");
   };
 
-  const batchCopySelected = async () => {
-    if (selectedIdeaIndexes.length === 0) {
-      updateStatus("error", "未选中分镜", "请先选择要复制的分镜卡片。");
-      return;
-    }
-
-    const selected = [...selectedIdeaIndexes]
-      .sort((a, b) => a - b)
-      .map((index) => ideas[index])
-      .filter(Boolean);
-
-    const text = selected.map((idea, idx) => buildIdeaCopyText(idea, idx)).join("\n\n");
-    try {
-      await navigator.clipboard.writeText(text);
-      updateStatus("success", "批量复制完成", `已复制 ${selected.length} 条分镜。`);
-    } catch {
-      updateStatus("error", "复制失败", "浏览器未授权剪贴板写入。");
-    }
-  };
-
-  const batchDeleteSelected = () => {
-    if (selectedIdeaIndexes.length === 0) {
-      updateStatus("error", "未选中分镜", "请先选择要删除的分镜卡片。");
-      return;
-    }
-
-    const confirmed = window.confirm(`确定删除已选中的 ${selectedIdeaIndexes.length} 条分镜吗？`);
-    if (!confirmed) {
-      return;
-    }
-
-    setIdeas((prev) => {
-      const nextIdeas = prev.filter((_, index) => !selectedIdeaIndexes.includes(index));
-      persistChapterIdeas(nextIdeas).catch(() => {
-        // non-blocking: keep UI responsive when persistence fails transiently
-      });
-      return nextIdeas;
-    });
-    updateStatus("success", "批量删除完成", `已删除 ${selectedIdeaIndexes.length} 条分镜。`);
-    setSelectedIdeaIndexes([]);
-    setLastSelectedIndex(null);
-  };
-
-  const batchFavoriteSelected = (shouldFavorite) => {
-    if (selectedIdeaIndexes.length === 0) {
-      updateStatus("error", "未选中分镜", "请先选择分镜卡片。");
-      return;
-    }
-
-    setFavorites((prev) => {
-      const next = { ...prev };
-      selectedIdeaIndexes.forEach((index) => {
-        const idea = ideas[index];
-        if (!idea) return;
-        const key = makeFavoriteKey(idea);
-        if (shouldFavorite) {
-          next[key] = { savedAt: Date.now(), title: idea.title };
-        } else {
-          delete next[key];
-        }
-      });
-      return next;
-    });
-
-    updateStatus(
-      "success",
-      shouldFavorite ? "批量收藏完成" : "批量取消收藏",
-      `已处理 ${selectedIdeaIndexes.length} 条分镜。`
-    );
-  };
-
   const copyBatchSeed = async (seed) => {
     try {
       await navigator.clipboard.writeText(String(seed || ""));
@@ -3008,7 +2870,7 @@ export default function StudioPage() {
 
       const finalTask = await waitForTaskCompletion(backendTaskId, (task) => {
         if (task.status === "running" || task.status === "pending") {
-          const stageSummary = formatTaskStageSummary(task);
+          const stageSummary = String(task?.summary || formatTaskStageSummary(task));
           patchTaskRun(taskId, {
             status: task.status,
             progress: Number(task.progress) || 0,
@@ -3094,86 +2956,22 @@ export default function StudioPage() {
       <GridLines />
       <PaperGrain />
 
-      <header className="motion-rise mx-auto w-[min(1600px,calc(100vw-2rem))] border-b border-atelier-fg/20 pb-8 pt-16 md:w-[min(1600px,calc(100vw-4rem))] md:pt-24">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="flex items-center gap-3 text-xs uppercase tracking-editorial text-atelier-subtle">
-            <span className="h-px w-12 bg-atelier-fg" />
-            Storyboard Atelier / Studio
-          </p>
-          <Link to="/" className="underline-reveal text-[10px] uppercase tracking-[0.22em] text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent">
-            返回主页面
-          </Link>
-        </div>
-        <section className="workspace-shell mt-5 border-t border-atelier-fg/10 pt-5">
-          <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto_auto] md:items-end">
-            <FieldLabel label="项目选择">
-              <EditorialSelect
-                value={currentProjectId}
-                onChange={handleSwitchProject}
-                options={projectSelectOptions}
-                placeholder={workspaceLoading ? "加载项目中..." : "请选择项目"}
-                disabled={workspaceLoading || workspaceBusy || projectSelectOptions.length === 0}
-              />
-              <small className="text-xs text-atelier-subtle">
-                {activeProject
-                  ? `${activeProject.chapterCount || 0} 章 · ${activeProject.shotCount || 0} 条分镜`
-                  : "切换项目后自动加载章节"}
-              </small>
-            </FieldLabel>
-
-            <FieldLabel label="章节选择">
-              <EditorialSelect
-                value={currentChapterId}
-                onChange={handleSwitchChapter}
-                options={chapterSelectOptions}
-                placeholder={workspaceLoading ? "加载章节中..." : "请选择章节"}
-                disabled={workspaceLoading || workspaceBusy || chapterSelectOptions.length === 0}
-              />
-              <small className="text-xs text-atelier-subtle">
-                {activeChapter
-                  ? `章节序号 ${activeChapter.sortOrder || 0} · ${activeChapter.shotCount || 0} 条分镜`
-                  : "章节为空，可通过工作区管理创建"}
-              </small>
-            </FieldLabel>
-
-            <button
-              type="button"
-              onClick={() => setWorkflowHubOpen(true)}
-              className="workspace-open-button"
-              disabled={workspaceLoading || workspaceBusy}
-            >
-              工作流中心
-            </button>
-            <button
-              type="button"
-              onClick={openVideoComposer}
-              className="workspace-open-button"
-              disabled={workspaceLoading || workspaceBusy || selectedIdeaIndexes.length < 2 || anyVideoLoading}
-            >
-              串联成片
-            </button>
-          </div>
-        </section>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
-            Project · {activeProject?.name || "未选择"}
-          </span>
-          <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
-            Chapter · {activeChapter?.title || "未选择"}
-          </span>
-          <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
-            路径 · /projects/{currentProjectId || "-"} / chapters/{currentChapterId || "-"}
-          </span>
-        </div>
-        <h1 className="mt-5 font-display text-5xl leading-[0.9] md:text-8xl">
-          Curated <em className="text-atelier-accent">Storyboard</em>
-          <br />
-          Expansion Studio
-        </h1>
-        <p className="dropcap mt-4 max-w-3xl text-base text-atelier-subtle md:text-lg">
-          这是一个可长期复用的分镜创意工作台。你给一个镜头种子，它输出一组可拍摄、可拼接、可继续写成脚本的分镜方向。
-        </p>
-      </header>
+      <StudioHeader
+        activeProject={activeProject}
+        activeChapter={activeChapter}
+        currentProjectId={currentProjectId}
+        currentChapterId={currentChapterId}
+        selectedIdeaIndexes={selectedIdeaIndexes}
+        workspaceLoading={workspaceLoading}
+        workspaceBusy={workspaceBusy}
+        anyVideoLoading={anyVideoLoading}
+        onOpenWorkspaceManager={() => {
+          setWorkspaceModalTab("project");
+          setWorkspaceModalOpen(true);
+        }}
+        onOpenWorkflowHub={() => setWorkflowHubOpen(true)}
+        onOpenVideoComposer={openVideoComposer}
+      />
 
       <VideoComposerModal
         open={videoComposerOpen}
@@ -3247,6 +3045,13 @@ export default function StudioPage() {
         }
         promptTemplate={settings.promptTemplate}
         onPromptTemplateChange={(nextTemplate) => updateSettings({ promptTemplate: nextTemplate })}
+        canvasActions={{
+          canOperateResults: ideas.length > 0,
+          onCopyAll: copyAll,
+          onExportMarkdown: exportMarkdown,
+          onExportJson: exportJson,
+          onClearResults: clearResults,
+        }}
         onOpenWorkspaceManager={() => {
           setWorkflowHubOpen(false);
           setWorkspaceModalTab("project");
@@ -3559,289 +3364,67 @@ export default function StudioPage() {
       ) : null}
 
       <main className="mx-auto grid w-[min(1600px,calc(100vw-2rem))] items-start gap-8 py-10 md:w-[min(1600px,calc(100vw-4rem))] lg:grid-cols-[5fr_7fr] lg:gap-10">
-        <aside className="workbench-panel motion-rise motion-rise-delay-1 relative lg:sticky lg:top-6">
-          <p className="vertical-tag right-[-22px] top-5 hidden lg:block">Control / Atelier</p>
+        <InputPanel
+          formRef={formRef}
+          settings={settings}
+          imageState={imageState}
+          placeholderImage={PLACEHOLDER_IMAGE}
+          modeOptions={modeOptions}
+          styleOptions={styleOptions}
+          countOptions={countOptions}
+          storyboardModes={STORYBOARD_MODES}
+          textModelValue={textModelValue}
+          imageModelValue={imageModelValue}
+          videoModelValue={videoModelValue}
+          loading={loading}
+          batchRunning={batchRunning}
+          onSubmit={handleGenerate}
+          onImageChange={handleImageChange}
+          onUpdateSettings={updateSettings}
+          onCancel={handleCancel}
+        />
 
-          <form ref={formRef} className="grid gap-5 md:gap-6" onSubmit={handleGenerate}>
-            <section className="module-block">
-              <p className="eyebrow-label">Input</p>
-              <h2 className="module-title mt-2">创作输入</h2>
-
-              <label className="mt-4 grid gap-2">
-                <span className="text-[10px] uppercase tracking-editorial text-atelier-subtle">分镜文本输入</span>
-                <textarea
-                  value={settings.seedText}
-                  onChange={(event) => updateSettings({ seedText: event.target.value })}
-                  maxLength={1200}
-                  className="min-h-28 border-b border-atelier-fg/20 bg-transparent py-2 text-sm leading-relaxed outline-none transition-colors duration-500 placeholder:font-display placeholder:italic placeholder:text-atelier-subtle focus:border-atelier-accent"
-                  placeholder="例：雨夜街角，主角停在霓虹倒影上，身后模糊人影逼近。"
-                />
-                <small className="text-xs text-atelier-subtle">{settings.seedText.length} / 1200</small>
-              </label>
-
-              <label className="mt-5 grid gap-2">
-                <span className="text-[10px] uppercase tracking-editorial text-atelier-subtle">分镜图片（可选）</span>
-                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleImageChange} className="text-xs text-atelier-subtle" />
-                <small className="text-xs text-atelier-subtle">支持 JPG / PNG / WEBP，最大 8MB</small>
-              </label>
-
-              <figure className="group mt-4 border-t border-atelier-fg/10 pt-4">
-                <img
-                  src={imageState.dataUrl || PLACEHOLDER_IMAGE}
-                  alt="分镜预览"
-                  className="aspect-[4/5] w-full border border-atelier-fg/15 object-cover shadow-atelier-image shadow-[inset_0_0_0_1px_rgba(0,0,0,0.06)] grayscale transition-all duration-[1800ms] ease-out group-hover:scale-[1.03] group-hover:grayscale-0"
-                />
-                <figcaption className="mt-2 text-xs text-atelier-subtle">{imageState.name ? `已附图：${imageState.name}` : "未上传图片，当前仅根据文本生成。"}</figcaption>
-              </figure>
-            </section>
-
-            <section className="module-block">
-              <p className="eyebrow-label">Settings</p>
-              <h3 className="module-title mt-2">生成参数</h3>
-
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
-                <FieldLabel label="模式">
-                  <EditorialSelect
-                    value={settings.modeId}
-                    onChange={(nextValue) => updateSettings({ modeId: nextValue })}
-                    options={modeOptions}
-                  />
-                </FieldLabel>
-
-                <FieldLabel label="风格">
-                  <EditorialSelect
-                    value={settings.styleBias}
-                    onChange={(nextValue) => updateSettings({ styleBias: nextValue })}
-                    options={styleOptions}
-                  />
-                </FieldLabel>
-
-                <FieldLabel label="生成条数">
-                  <EditorialSelect
-                    value={String(settings.ideaCount)}
-                    onChange={(nextValue) => updateSettings({ ideaCount: Number(nextValue) })}
-                    options={countOptions}
-                  />
-                </FieldLabel>
-
-                <FieldLabel label="文本模型">
-                  <input
-                    value={textModelValue}
-                    onChange={(event) => updateSettings({ textModel: event.target.value })}
-                    className="w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm outline-none transition-colors duration-500 focus:border-atelier-accent"
-                  />
-                </FieldLabel>
-
-                <FieldLabel label="出图模型">
-                  <input
-                    value={imageModelValue}
-                    onChange={(event) => updateSettings({ imageModel: event.target.value })}
-                    className="w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm outline-none transition-colors duration-500 focus:border-atelier-accent"
-                  />
-                </FieldLabel>
-
-                <FieldLabel label="视频模型">
-                  <input
-                    value={videoModelValue}
-                    onChange={(event) => updateSettings({ videoModel: event.target.value })}
-                    className="w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm outline-none transition-colors duration-500 focus:border-atelier-accent"
-                  />
-                </FieldLabel>
-
-                <FieldLabel label="Temperature">
-                  <RangeNumberField
-                    value={settings.temperature}
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    onChange={(next) => updateSettings({ temperature: Number(next) })}
-                    formatValue={(next) => `温度 ${Number(next).toFixed(1)}`}
-                  />
-                </FieldLabel>
-
-                <FieldLabel label="Top P">
-                  <RangeNumberField
-                    value={settings.topP}
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    onChange={(next) => updateSettings({ topP: Number(next) })}
-                    formatValue={(next) => `采样 ${Number(next).toFixed(2)}`}
-                  />
-                </FieldLabel>
-              </div>
-
-              <p className="mt-4 border-t border-atelier-fg/10 pt-3 text-xs text-atelier-subtle">
-                高级 Prompt 模板、批量工作流、任务队列与历史记录已整合到“工作流中心”。
-              </p>
-            </section>
-
-            <ModeLibrary modes={STORYBOARD_MODES} activeModeId={settings.modeId} onSelect={(modeId) => updateSettings({ modeId })} />
-
-            <section className="module-block">
-              <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-                <PrimaryButton type="submit" disabled={loading}>
-                  {loading ? "生成中" : "拓展分镜"}
-                </PrimaryButton>
-                <button
-                  type="button"
-                  disabled={!loading && !batchRunning}
-                  onClick={handleCancel}
-                  className="min-h-12 border border-atelier-fg px-8 text-xs uppercase tracking-button transition-colors duration-500 hover:bg-atelier-fg hover:text-atelier-inverse disabled:opacity-50"
-                >
-                  取消任务
-                </button>
-              </div>
-              <p className="mt-3 text-xs text-atelier-subtle">快捷键：Ctrl/Cmd + Enter 直接生成</p>
-            </section>
-
-          </form>
-        </aside>
-
-        <section className="workbench-panel motion-rise motion-rise-delay-2 relative">
-          <div ref={resultsAnchorRef} className="absolute -top-2 left-0 h-px w-px" aria-hidden="true" />
-          <p className="vertical-tag right-[-22px] top-5 hidden lg:block">Results / Edition</p>
-
-          <header className="flex flex-wrap items-start justify-between gap-4 border-b border-atelier-fg/15 pb-4">
-            <div>
-              <p className="flex items-center gap-3 text-[10px] uppercase tracking-editorial text-atelier-subtle">
-                <span className="h-px w-10 bg-atelier-fg" />
-                Output
-              </p>
-              <h2 className="mt-3 font-display text-5xl font-normal leading-[0.95]">拓展结果画布</h2>
-            </div>
-            <div className="status-console max-w-sm">
-              <StatusBadge state={status.kind} text={status.badge} />
-              <p className="mt-2 text-sm text-atelier-subtle">{status.text}</p>
-            </div>
-          </header>
-
-          <section className="module-block mt-4">
-            <div className="flex flex-wrap gap-2">
-              <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">模式 · {activeMode.name}</span>
-              <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">风格 · {activeStyleLabel}</span>
-              <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">条数 · {settings.ideaCount}</span>
-              <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">文本模型 · {textModelValue}</span>
-              <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">出图模型 · {imageModelValue}</span>
-              <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">视频模型 · {videoModelValue}</span>
-            </div>
-          </section>
-
-          <div className="toolbar-shelf mt-4 flex flex-wrap items-center gap-3">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-atelier-subtle">筛选</p>
-            {FILTER_MODES.map((mode) => (
-              <button
-                key={mode.id}
-                type="button"
-                onClick={() => setFilterMode(mode.id)}
-                className={`border px-2 py-1 text-[10px] uppercase tracking-[0.18em] transition-colors duration-500 ${
-                  filterMode === mode.id
-                    ? "border-atelier-accent bg-atelier-accent text-atelier-inverse"
-                    : "border-atelier-fg/20 text-atelier-subtle hover:border-atelier-accent hover:text-atelier-accent"
-                }`}
-              >
-                {mode.label}
-              </button>
-            ))}
-            <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
-              可见 {visibleEntries.length}
-            </span>
-            <span className="border border-atelier-fg/15 bg-white/40 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
-              已选 {selectedVisibleCount}
-            </span>
-            <span className="mx-1 h-4 w-px bg-atelier-fg/20" aria-hidden="true" />
-            {IDEA_MEDIA_FILTERS.map((mode) => (
-              <button
-                key={mode.id}
-                type="button"
-                onClick={() => setIdeaMediaFilter(mode.id)}
-                className={`border px-2 py-1 text-[10px] uppercase tracking-[0.18em] transition-colors duration-500 ${
-                  normalizeIdeaMediaFilter(ideaMediaFilter) === mode.id
-                    ? "border-atelier-accent bg-atelier-accent text-atelier-inverse"
-                    : "border-atelier-fg/20 text-atelier-subtle hover:border-atelier-accent hover:text-atelier-accent"
-                }`}
-              >
-                {mode.label}
-              </button>
-            ))}
-            <label className="ml-auto flex min-w-[220px] items-center gap-2 border-b border-atelier-fg/20 px-1 py-1">
-              <span className="text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">检索</span>
-              <input
-                type="text"
-                value={ideaSearchText}
-                onChange={(event) => setIdeaSearchText(event.target.value)}
-                className="w-full bg-transparent text-xs text-atelier-fg outline-none placeholder:italic placeholder:text-atelier-subtle"
-                placeholder="标题 / 场景 / 摄影 / 情绪"
-              />
-            </label>
-          </div>
-
-          <div className="toolbar-shelf mt-2 flex flex-wrap gap-4">
-            <ToolbarButton onClick={copyAll} disabled={ideas.length === 0}>复制全部</ToolbarButton>
-            <ToolbarButton onClick={exportMarkdown} disabled={ideas.length === 0}>导出 Markdown</ToolbarButton>
-            <ToolbarButton onClick={exportJson} disabled={ideas.length === 0}>导出 JSON</ToolbarButton>
-            <ToolbarButton onClick={clearResults} disabled={ideas.length === 0}>清空结果</ToolbarButton>
-            <span className="mx-1 h-4 w-px bg-atelier-fg/20" aria-hidden="true" />
-            <ToolbarButton onClick={selectAllVisible} disabled={visibleEntries.length === 0}>全选可见</ToolbarButton>
-            <ToolbarButton onClick={clearSelection} disabled={selectedIdeaIndexes.length === 0}>清除选择</ToolbarButton>
-            <ToolbarButton onClick={batchCopySelected} disabled={selectedIdeaIndexes.length === 0}>复制所选</ToolbarButton>
-            <ToolbarButton onClick={batchGenerateSelectedImages} disabled={selectedIdeaIndexes.length === 0 || batchImageRunning || anyImageLoading}>
-              {batchImageRunning ? "出图中" : "所选出图"}
-            </ToolbarButton>
-            <ToolbarButton onClick={() => batchFavoriteSelected(true)} disabled={selectedIdeaIndexes.length === 0}>收藏所选</ToolbarButton>
-            <ToolbarButton onClick={() => batchFavoriteSelected(false)} disabled={selectedIdeaIndexes.length === 0}>取消收藏</ToolbarButton>
-            <ToolbarButton onClick={batchDeleteSelected} disabled={selectedIdeaIndexes.length === 0}>删除所选</ToolbarButton>
-          </div>
-
-          {loading ? (
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
-              {Array.from({ length: Number(settings.ideaCount) }).map((_, idx) => (
-                <article key={idx} className="animate-pulseSoft border-t border-atelier-fg/10 pt-4">
-                  <div className="h-3 w-16 bg-atelier-fg/10" />
-                  <div className="mt-3 h-6 w-3/4 bg-atelier-fg/10" />
-                  <div className="mt-2 h-3 w-full bg-atelier-fg/10" />
-                  <div className="mt-2 h-3 w-2/3 bg-atelier-fg/10" />
-                </article>
-              ))}
-            </div>
-          ) : ideas.length === 0 ? (
-            <section className="result-empty mt-6">
-              <h3 className="font-display text-3xl font-normal">尚未生成</h3>
-              <p className="mt-2 max-w-2xl text-sm text-atelier-subtle">从一个镜头起步，扩展成可拍摄、可重组、可继续写成完整分镜脚本的一组方向。</p>
-            </section>
-          ) : visibleEntries.length === 0 ? (
-            <section className="result-empty mt-6">
-              <h3 className="font-display text-3xl font-normal">当前筛选无结果</h3>
-              <p className="mt-2 max-w-2xl text-sm text-atelier-subtle">可切回“全部”或调整收藏状态查看对应分镜。</p>
-            </section>
-          ) : (
-            <section className="mt-6 grid gap-5 md:grid-cols-2">
-              {visibleEntries.map(({ idea, index, favorite }) => {
-                const key = makeIdeaKey(idea, index);
-                return (
-                  <IdeaCard
-                    key={key}
-                    idea={idea}
-                    index={index}
-                    onCopy={copySingle}
-                    onRemix={remixOne}
-                    onGenerateImage={generateIdeaImage}
-                    onDownloadImage={downloadIdeaImage}
-                    onGenerateVideo={generateIdeaVideo}
-                    onDownloadVideo={downloadIdeaVideo}
-                    onFavorite={toggleFavorite}
-                    favorite={favorite}
-                    selected={selectedIdeaIndexes.includes(index)}
-                    onToggleSelect={(event) => toggleSelectIdea(index, event.shiftKey)}
-                    imageState={idea.generatedImage}
-                    videoState={idea.generatedVideo}
-                  />
-                );
-              })}
-            </section>
-          )}
-
-        </section>
+        <ResultCanvas
+          resultsAnchorRef={resultsAnchorRef}
+          status={status}
+          activeMode={activeMode}
+          activeStyleLabel={activeStyleLabel}
+          settings={settings}
+          textModelValue={textModelValue}
+          imageModelValue={imageModelValue}
+          videoModelValue={videoModelValue}
+          filterModes={FILTER_MODES}
+          filterMode={filterMode}
+          onChangeFilterMode={setFilterMode}
+          ideaMediaFilters={IDEA_MEDIA_FILTERS}
+          ideaMediaFilter={ideaMediaFilter}
+          onChangeIdeaMediaFilter={setIdeaMediaFilter}
+          normalizeIdeaMediaFilter={normalizeIdeaMediaFilter}
+          ideaSearchText={ideaSearchText}
+          onChangeIdeaSearchText={setIdeaSearchText}
+          visibleEntries={visibleEntries}
+          selectedVisibleCount={selectedVisibleCount}
+          loading={loading}
+          ideas={ideas}
+          selectedIdeaIndexes={selectedIdeaIndexes}
+          onCopyAll={copyAll}
+          onExportMarkdown={exportMarkdown}
+          onExportJson={exportJson}
+          onSelectAllVisible={selectAllVisible}
+          onClearSelection={clearSelection}
+          onBatchGenerateSelectedImages={batchGenerateSelectedImages}
+          batchImageRunning={batchImageRunning}
+          anyImageLoading={anyImageLoading}
+          onOpenWorkflowHub={() => setWorkflowHubOpen(true)}
+          onCopySingle={copySingle}
+          onRemixOne={remixOne}
+          onGenerateIdeaImage={generateIdeaImage}
+          onDownloadIdeaImage={downloadIdeaImage}
+          onGenerateIdeaVideo={generateIdeaVideo}
+          onDownloadIdeaVideo={downloadIdeaVideo}
+          onToggleFavorite={toggleFavorite}
+          onToggleSelectIdea={toggleSelectIdea}
+        />
       </main>
     </div>
   );
@@ -3860,28 +3443,6 @@ function GridLines() {
 
 function PaperGrain() {
   return <div className="paper-grain pointer-events-none fixed inset-0 z-50" />;
-}
-
-function FieldLabel({ label, children }) {
-  return (
-    <label className="grid gap-2">
-      <span className="text-[10px] uppercase tracking-editorial text-atelier-subtle">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function ToolbarButton({ children, onClick, disabled }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="underline-reveal text-[10px] uppercase tracking-[0.2em] text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent disabled:opacity-45"
-    >
-      {children}
-    </button>
-  );
 }
 
 function readAsDataUrl(file) {
@@ -3907,22 +3468,6 @@ function makeFavoriteKey(idea) {
   return `${idea?.title || ""}__${idea?.scene || ""}`.slice(0, 260);
 }
 
-function makeIdeaKey(idea, index) {
-  return `${makeFavoriteKey(idea)}__${index}`;
-}
-
-function formatProjectOptionLabel(item) {
-  const name = String(item?.name || "").trim() || "未命名项目";
-  const chapterCount = Number(item?.chapterCount || 0);
-  return `${name} · ${chapterCount} 章`;
-}
-
-function formatChapterOptionLabel(item) {
-  const title = String(item?.title || "").trim() || "未命名章节";
-  const shotCount = Number(item?.shotCount || 0);
-  return `${title} · ${shotCount} 条`;
-}
-
 function isEditableTarget(target) {
   if (!(target instanceof Element)) return false;
   const tag = target.tagName.toLowerCase();
@@ -3943,80 +3488,6 @@ function triggerDownloadFromDataUrl(filename, dataUrl) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-}
-
-function splitImageReference(rawValue) {
-  const value = String(rawValue || "").trim();
-  if (!value) {
-    return { dataUrl: "", url: "" };
-  }
-  if (value.startsWith("data:image/")) {
-    return { dataUrl: value, url: "" };
-  }
-  if (value.startsWith("http://") || value.startsWith("https://")) {
-    return { dataUrl: "", url: value };
-  }
-  return { dataUrl: "", url: "" };
-}
-
-function normalizeReferenceImagePolicyValue(value) {
-  const safe = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (safe === "all" || safe === "keyframes" || safe === "first_last" || safe === "text_only") {
-    return safe;
-  }
-  return "all";
-}
-
-function applyReferencePolicyToSequenceIdeas(sequenceIdeas, policy) {
-  const sequence = Array.isArray(sequenceIdeas) ? sequenceIdeas : [];
-  const safePolicy = normalizeReferenceImagePolicyValue(policy);
-  if (sequence.length === 0) {
-    return [];
-  }
-
-  if (safePolicy === "all") {
-    return sequence.map((shot) => ({ ...shot }));
-  }
-
-  if (safePolicy === "text_only") {
-    return sequence.map((shot) => ({
-      ...shot,
-      referenceImageDataUrl: "",
-      referenceImageUrl: "",
-    }));
-  }
-
-  const keepIndexes = new Set();
-  if (safePolicy === "first_last") {
-    keepIndexes.add(0);
-    keepIndexes.add(sequence.length - 1);
-  } else if (safePolicy === "keyframes") {
-    keepIndexes.add(0);
-    keepIndexes.add(Math.floor((sequence.length - 1) / 2));
-    keepIndexes.add(sequence.length - 1);
-  }
-
-  return sequence.map((shot, index) => {
-    if (keepIndexes.has(index)) {
-      return { ...shot };
-    }
-    return {
-      ...shot,
-      referenceImageDataUrl: "",
-      referenceImageUrl: "",
-    };
-  });
-}
-
-function countSequenceReferenceImages(sequenceIdeas) {
-  const sequence = Array.isArray(sequenceIdeas) ? sequenceIdeas : [];
-  return sequence.filter((shot) => {
-    const dataUrl = String(shot?.referenceImageDataUrl || "").trim();
-    const url = String(shot?.referenceImageUrl || "").trim();
-    return Boolean(dataUrl || url);
-  }).length;
 }
 
 async function triggerDownloadFromUrl(filename, rawUrl) {
@@ -4089,61 +3560,9 @@ function isRenderableVideoUrl(url) {
   return value.startsWith("http://") || value.startsWith("https://");
 }
 
-function formatTaskStageSummary(task) {
-  const stageText = String(task?.stageText || "").trim();
-  const progress = Number(task?.progress);
-  const safeProgress = Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 0;
-  if (stageText) {
-    return `${stageText} · ${safeProgress}%`;
-  }
-  return `任务进度 ${safeProgress}%`;
-}
-
-function formatReferenceImagePolicyLabel(value) {
-  const safe = normalizeReferenceImagePolicyValue(value);
-  if (safe === "all") return "全部图参";
-  if (safe === "keyframes") return "关键帧";
-  if (safe === "first_last") return "首尾帧";
-  return "仅文本";
-}
-
-function normalizeQueueFilter(value) {
-  const mode = String(value || "").toLowerCase();
-  return QUEUE_FILTER_MODES[mode] ? mode : "all";
-}
-
-function normalizeIdeaMediaFilter(value) {
-  const mode = String(value || "").toLowerCase();
-  return IDEA_MEDIA_FILTERS.some((item) => item.id === mode) ? mode : "all";
-}
-
-function isIdeaImageReady(idea) {
-  const status = String(idea?.generatedImage?.status || "").trim().toLowerCase();
-  const url = String(idea?.generatedImage?.url || "").trim();
-  return status === "success" && Boolean(url);
-}
-
-function isIdeaVideoReady(idea) {
-  const status = String(idea?.generatedVideo?.status || "").trim().toLowerCase();
-  const url = String(idea?.generatedVideo?.url || "").trim();
-  return status === "success" && Boolean(url);
-}
-
-function normalizeWorkflowHubTab(value) {
-  const mode = String(value || "").toLowerCase();
-  return WORKFLOW_HUB_TABS[mode] ? mode : "batch";
-}
-
 function buildStudioPath(projectId, chapterId) {
   return `/projects/${encodeURIComponent(String(projectId || ""))}/chapters/${encodeURIComponent(
     String(chapterId || "")
   )}/studio`;
 }
 
-function SummaryChevron() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none">
-      <path d="M3 6l5 5 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
-    </svg>
-  );
-}

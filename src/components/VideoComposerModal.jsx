@@ -4,7 +4,7 @@ import { EditorialSelect } from "./EditorialSelect";
 const ASPECT_RATIO_OPTIONS = [
   { value: "16:9", label: "16:9 横屏" },
   { value: "9:16", label: "9:16 竖屏" },
-  { value: "1:1", label: "1:1 方形" },
+  { value: "1:1", label: "1:1 方屏" },
   { value: "4:3", label: "4:3 经典" },
   { value: "3:4", label: "3:4 竖构图" },
 ];
@@ -57,7 +57,7 @@ export function VideoComposerModal({
   const availableImageCount = Number(safeStats.availableImageCount || 0);
 
   return (
-    <div className="composer-modal fixed inset-0 z-[82] flex items-center justify-center px-4 py-6 md:px-8">
+    <div className="composer-modal fixed inset-0 z-[82] flex items-center justify-center px-0 py-0 md:px-8 md:py-8">
       <button
         type="button"
         className="composer-modal-backdrop absolute inset-0"
@@ -67,15 +67,15 @@ export function VideoComposerModal({
       <section
         role="dialog"
         aria-modal="true"
-        aria-label="分镜串联视频编排器"
-        className="composer-modal-panel motion-rise relative z-10 w-full max-w-6xl"
+        aria-label="分镜串联成片"
+        className="composer-modal-panel motion-rise relative z-10 flex h-screen w-full flex-col md:h-[calc(100vh-4.5rem)] md:max-w-6xl"
       >
         <header className="composer-modal-header">
           <div>
             <p className="eyebrow-label">Video Composer</p>
             <h3 className="module-title mt-2">分镜串联成片</h3>
             <p className="mt-2 text-sm text-atelier-subtle">
-              选择多条分镜，按顺序串联为单条连续视频。当前链路 {shotCount} 条。
+              将多条分镜按顺序串联为一条连续视频。当前链路共 {shotCount} 条镜头。
             </p>
           </div>
           <button type="button" onClick={onClose} className="workspace-modal-close">
@@ -111,7 +111,7 @@ export function VideoComposerModal({
 
             {shotCount === 0 ? (
               <p className="mt-3 text-sm text-atelier-subtle">
-                先在主画布选中多条分镜，然后点击“串联成片”。
+                请先在主画布勾选多条分镜，然后点击“串联成片”。
               </p>
             ) : (
               <>
@@ -130,7 +130,7 @@ export function VideoComposerModal({
                               <img
                                 src={previewUrl}
                                 alt={`镜头 ${idx + 1} 参考图`}
-                                className="h-14 w-14 shrink-0 border border-atelier-fg/15 object-cover grayscale transition-all duration-700 hover:grayscale-0"
+                                className="h-14 w-14 shrink-0 border border-atelier-fg/15 object-cover grayscale transition-all duration-[1500ms] hover:grayscale-0"
                               />
                             ) : (
                               <div className="h-14 w-14 shrink-0 border border-atelier-fg/12 bg-atelier-muted/20" />
@@ -189,7 +189,7 @@ export function VideoComposerModal({
                   value={String(config?.title || "")}
                   onChange={(event) => onConfigChange?.({ title: event.target.value })}
                   className="workspace-text-input"
-                  placeholder="例：第一章 · 追逐段落"
+                  placeholder="例如：第一章 · 追逐段落"
                 />
               </label>
 
@@ -242,8 +242,8 @@ export function VideoComposerModal({
                 <textarea
                   value={String(config?.continuityNote || "")}
                   onChange={(event) => onConfigChange?.({ continuityNote: event.target.value })}
-                  className="min-h-20 border-b border-atelier-fg/20 bg-transparent py-2 text-sm leading-relaxed outline-none transition-colors duration-500 placeholder:font-display placeholder:italic placeholder:text-atelier-subtle focus:border-atelier-accent"
-                  placeholder="例：主角服装与受伤状态保持一致，场景时间应连续推进。"
+                  className="workspace-textarea-input min-h-20"
+                  placeholder="例如：主角服装与受伤状态保持一致，场景时间应连续推进。"
                 />
               </label>
 
@@ -252,13 +252,13 @@ export function VideoComposerModal({
                 <textarea
                   value={String(config?.negativePrompt || "")}
                   onChange={(event) => onConfigChange?.({ negativePrompt: event.target.value })}
-                  className="min-h-16 border-b border-atelier-fg/20 bg-transparent py-2 text-sm leading-relaxed outline-none transition-colors duration-500 placeholder:font-display placeholder:italic placeholder:text-atelier-subtle focus:border-atelier-accent"
-                  placeholder="例：no subtitle, no watermark, no logo, no text overlay"
+                  className="workspace-textarea-input min-h-16"
+                  placeholder="例如：no subtitle, no watermark, no logo, no text overlay"
                 />
               </label>
 
-              <details className="border-t border-atelier-fg/10 pt-2">
-                <summary className="details-summary group flex cursor-pointer list-none items-center justify-between text-[10px] uppercase tracking-editorial text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent">
+              <details className="workspace-disclosure border-t border-atelier-fg/10 pt-2">
+                <summary className="workspace-disclosure-summary details-summary group list-none text-[10px] uppercase tracking-editorial text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent">
                   <span>串联提示词模板（可选）</span>
                   <span className="details-chevron transition-transform duration-500 group-hover:text-atelier-accent">
                     <SummaryChevron />
@@ -267,8 +267,8 @@ export function VideoComposerModal({
                 <textarea
                   value={String(config?.promptTemplate || "")}
                   onChange={(event) => onConfigChange?.({ promptTemplate: event.target.value })}
-                  className="mt-3 min-h-32 w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm leading-relaxed outline-none transition-colors duration-500 placeholder:font-display placeholder:italic placeholder:text-atelier-subtle focus:border-atelier-accent"
-                  placeholder="支持占位符：{{shots}} {{durationSeconds}} {{aspectRatio}} {{transitionStyle}} {{continuityNote}} {{referencePolicy}}"
+                  className="workspace-textarea-input mt-3 min-h-32"
+                  placeholder="支持 {{shots}} {{durationSeconds}} {{aspectRatio}} {{transitionStyle}} {{continuityNote}} {{referencePolicy}}"
                 />
               </details>
             </div>
@@ -333,8 +333,7 @@ export function VideoComposerModal({
                       <div className="min-w-0">
                         <p className="truncate text-sm text-atelier-fg">{item.title || "未命名串联视频"}</p>
                         <p className="mt-1 text-[10px] uppercase tracking-[0.18em] text-atelier-subtle">
-                          {item.shotIndexes?.length || 0} 条分镜 · 图参 {Number(item.referenceImageCount || 0)} 张 ·{" "}
-                          {formatTime(item.createdAt)}
+                          {item.shotIndexes?.length || 0} 条分镜 · 图参 {Number(item.referenceImageCount || 0)} 张 · {formatTime(item.createdAt)}
                         </p>
                         <p className="mt-1 text-xs text-atelier-subtle">{buildConfigSummary(item)}</p>
                       </div>

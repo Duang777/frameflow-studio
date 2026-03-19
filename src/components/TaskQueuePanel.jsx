@@ -3,20 +3,20 @@ import { formatTime } from "../lib/formatters";
 import { StatusBadge } from "./StatusBadge";
 
 const TASK_STATUS_MAP = {
-  pending: { badgeState: "idle", badgeText: "Queued" },
-  running: { badgeState: "loading", badgeText: "Running" },
-  success: { badgeState: "success", badgeText: "Done" },
-  error: { badgeState: "error", badgeText: "Failed" },
-  cancelled: { badgeState: "idle", badgeText: "Canceled" },
+  pending: { badgeState: "idle", badgeText: "排队中" },
+  running: { badgeState: "loading", badgeText: "运行中" },
+  success: { badgeState: "success", badgeText: "已完成" },
+  error: { badgeState: "error", badgeText: "失败" },
+  cancelled: { badgeState: "idle", badgeText: "已取消" },
 };
 
 const TYPE_LABEL_MAP = {
-  expand: "Expand",
-  remix: "Remix",
-  batch: "Batch",
-  image: "Image",
-  video: "Video",
-  "video-sequence": "Sequence",
+  expand: "分镜拓展",
+  remix: "单条再生成",
+  batch: "批量拓展",
+  image: "分镜出图",
+  video: "视频生成",
+  "video-sequence": "串联视频",
 };
 
 const FILTER_OPTIONS = {
@@ -48,8 +48,8 @@ export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, onRetry, filte
     <section className="module-block mt-6">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="eyebrow-label">Tasks</p>
-          <h3 className="module-title mt-2">Task Queue</h3>
+          <p className="eyebrow-label">Queue</p>
+          <h3 className="module-title mt-2">任务队列</h3>
         </div>
         <button
           type="button"
@@ -57,7 +57,7 @@ export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, onRetry, filte
           onClick={onClear}
           disabled={runs.length === 0}
         >
-          Clear Tasks
+          清空队列
         </button>
       </div>
 
@@ -81,7 +81,7 @@ export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, onRetry, filte
 
       {filteredRuns.length === 0 ? (
         <p className="mt-3 text-sm text-atelier-subtle">
-          {runs.length === 0 ? "No tasks yet." : "No tasks match the current filter."}
+          {runs.length === 0 ? "暂无任务记录。" : "当前筛选下没有任务。"}
         </p>
       ) : (
         <ul className="mt-4 grid gap-2">
@@ -107,8 +107,8 @@ export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, onRetry, filte
                       {TYPE_LABEL_MAP[run.type] || run.type || "Task"}
                     </span>
                     <StatusBadge state={statusMeta.badgeState} text={statusMeta.badgeText} />
-                    <span className="text-xs text-atelier-subtle">{formatTime(run.startedAt)}</span>
-                    {duration && <span className="text-xs text-atelier-subtle">Duration {duration}</span>}
+            <span className="text-xs text-atelier-subtle">{formatTime(run.startedAt)}</span>
+                    {duration && <span className="text-xs text-atelier-subtle">耗时 {duration}</span>}
                     <span className="text-xs text-atelier-subtle">{progress}%</span>
                   </div>
                   {run.sourceLabel && (
@@ -128,7 +128,7 @@ export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, onRetry, filte
                       aria-hidden="true"
                     />
                   </div>
-                  <p className="mt-1 text-xs text-atelier-subtle">{run.summary || "Processing..."}</p>
+                  <p className="mt-1 text-xs text-atelier-subtle">{run.summary || "处理中..."}</p>
                 </div>
                 <div className="flex min-w-[68px] flex-col items-end gap-2">
                   {run.status === "success" && run.resultPayload && (
@@ -154,7 +154,7 @@ export function TaskQueuePanel({ runs, onClear, onRemove, onOpen, onRetry, filte
                     className="underline-reveal text-[10px] uppercase tracking-[0.2em] text-atelier-subtle transition-colors duration-500 hover:text-atelier-accent"
                     onClick={() => onRemove(run.id)}
                   >
-                    Remove
+                    移除
                   </button>
                 </div>
               </li>

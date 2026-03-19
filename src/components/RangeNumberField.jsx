@@ -17,7 +17,7 @@ export function RangeNumberField({
   };
 
   return (
-    <div className="grid gap-2">
+    <div className="editor-control-shell grid gap-2">
       <div className="relative">
         <input
           type="range"
@@ -42,7 +42,7 @@ export function RangeNumberField({
           step={step}
           value={numericValue}
           onChange={(event) => commit(event.target.value)}
-          className="w-20 border-b border-atelier-fg/20 bg-transparent py-1 text-right text-xs outline-none transition-colors duration-500 focus:border-atelier-accent"
+          className="w-20 border-b border-atelier-fg/20 bg-transparent py-1 text-right text-xs text-atelier-fg outline-none transition-colors duration-500 focus:border-atelier-accent"
         />
       </div>
     </div>

@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick Start</a> · <a href="#demo">Demo</a> · <a href="#roadmap">Roadmap</a>
+  <a href="#quick-start">Quick Start</a> · <a href="#demo">Demo</a> · <a href="#roadmap">Roadmap</a> · <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
 ---
@@ -94,6 +94,30 @@ It focuses on an end-to-end pipeline instead of one-shot text generation:
 - Storage: SQLite (`server/data/storyboard.sqlite`)
 
 Core tables: `projects`, `chapters`, `shots`, `shot_images`, `shot_videos`, `sequence_videos`, `history_entries`
+
+### Architecture Diagram (Simplified)
+
+```mermaid
+flowchart LR
+  A["Web UI (React + Tailwind)"] --> B["Express API"]
+  B --> C["Task Manager (In-Memory Queue)"]
+  B --> D["Gemini Proxy Layer"]
+  B --> E["SQLite (Project/History/Sequence)"]
+  C --> D
+```
+
+### Feature Matrix
+
+| Capability | Status | Notes |
+|---|---|---|
+| Storyboard expansion (single) | ✅ | Text/image input with 6/8/10 outputs |
+| Storyboard expansion (batch) | ✅ | Batch workflow + queue tracking |
+| Per-shot image generation | ✅ | Retry supported, persisted per chapter |
+| Per-shot video generation | ✅ | Retry supported, persisted per chapter |
+| Multi-shot sequence video | ✅ | Ordered chain with reference-image policies |
+| Sequence video replay/history | ✅ | SQLite persistence by project/chapter |
+| Workflow Hub URL memory | ✅ | Preserves queue filter + active tab |
+| Redis-backed queue | ⏳ | Planned for a later reliability milestone |
 
 ---
 
@@ -203,6 +227,8 @@ Open `http://localhost:8787/api/health`
 | GET | `/api/tasks/:taskId` | Poll task status |
 | POST | `/api/tasks/:taskId/cancel` | Cancel task |
 
+`GET /api/tasks/:taskId` includes optional enhanced fields in `task`: `stageCode`, `summary`, and `retryable` (backward compatible).
+
 ---
 
 ## Roadmap
@@ -211,6 +237,17 @@ Open `http://localhost:8787/api/health`
 - Team collaboration and permission model
 - Object storage for generated media assets
 - Richer shot grammar and reusable prompt packs
+
+---
+
+## Troubleshooting
+
+- **Tasks stay queued forever**  
+  Open `http://localhost:8787/api/health` and verify `hasApiKey=true` and backend availability.
+- **Auth/model errors during generation**  
+  Re-check `.env` values for `GEMINI_API_KEY`, model names, and endpoint templates.
+- **Cursor/proxy network failure**  
+  See [proxy troubleshooting guide](docs/cursor-proxy-troubleshooting.md).
 
 ---
 

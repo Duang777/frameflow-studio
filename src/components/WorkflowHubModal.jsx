@@ -22,6 +22,7 @@ export function WorkflowHubModal({
   promptTemplate,
   onPromptTemplateChange,
   onOpenWorkspaceManager,
+  canvasActions,
 }) {
   if (!open) {
     return null;
@@ -31,7 +32,7 @@ export function WorkflowHubModal({
   const safeAdvanced = advancedConfig && typeof advancedConfig === "object" ? advancedConfig : {};
 
   return (
-    <div className="workflow-hub-modal fixed inset-0 z-[74] flex items-center justify-center px-3 py-4 md:px-8 md:py-8">
+    <div className="workflow-hub-modal fixed inset-0 z-[74] flex items-center justify-center px-0 py-0 md:px-8 md:py-8">
       <button
         type="button"
         className="workflow-hub-backdrop absolute inset-0"
@@ -43,13 +44,15 @@ export function WorkflowHubModal({
         role="dialog"
         aria-modal="true"
         aria-label="工作流中心"
-        className="workflow-hub-panel motion-rise relative z-10 flex h-[calc(100vh-2rem)] w-full max-w-[1280px] flex-col md:h-[calc(100vh-4.5rem)]"
+        className="workflow-hub-panel motion-rise relative z-10 flex h-screen w-full flex-col md:h-[calc(100vh-4.5rem)] md:max-w-[1280px]"
       >
         <header className="workflow-hub-header">
           <div>
             <p className="eyebrow-label">Workflow Hub</p>
             <h2 className="mt-2 font-display text-4xl leading-[0.9] md:text-5xl">工作流中心</h2>
-            <p className="mt-2 text-sm text-atelier-subtle">批量、任务、历史与高级参数统一在这里管理。</p>
+            <p className="mt-2 text-sm text-atelier-subtle">
+              批量任务、队列跟踪、历史回放与高级模板统一在这里管理。
+            </p>
           </div>
           <button type="button" onClick={onClose} className="workspace-modal-close">
             关闭
@@ -113,7 +116,7 @@ export function WorkflowHubModal({
 
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 <label className="workspace-inline-field mt-0">
-                  <span className="workspace-inline-label">Sequence Prompt 模板</span>
+                  <span className="workspace-inline-label">串联视频 Prompt 模板</span>
                   <textarea
                     value={String(safeAdvanced.sequencePromptTemplate || "")}
                     onChange={(event) =>
@@ -121,13 +124,13 @@ export function WorkflowHubModal({
                         sequencePromptTemplate: event.target.value,
                       })
                     }
-                    className="min-h-32 border-b border-atelier-fg/20 bg-transparent py-2 text-sm leading-relaxed outline-none transition-colors duration-500 placeholder:font-display placeholder:italic placeholder:text-atelier-subtle focus:border-atelier-accent"
-                    placeholder="串联视频模板，支持 shots/duration/aspectRatio 等占位符。"
+                    className="workspace-textarea-input"
+                    placeholder="支持 {{shots}} / {{durationSeconds}} / {{aspectRatio}} / {{referencePolicy}} 等占位符。"
                   />
                 </label>
 
                 <label className="workspace-inline-field mt-0">
-                  <span className="workspace-inline-label">串联默认连贯性备注</span>
+                  <span className="workspace-inline-label">默认连续性说明</span>
                   <textarea
                     value={String(safeAdvanced.sequenceContinuityNote || "")}
                     onChange={(event) =>
@@ -135,8 +138,8 @@ export function WorkflowHubModal({
                         sequenceContinuityNote: event.target.value,
                       })
                     }
-                    className="min-h-32 border-b border-atelier-fg/20 bg-transparent py-2 text-sm leading-relaxed outline-none transition-colors duration-500 placeholder:font-display placeholder:italic placeholder:text-atelier-subtle focus:border-atelier-accent"
-                    placeholder="例如：主角服装和受伤状态保持一致，时间线持续推进。"
+                    className="workspace-textarea-input"
+                    placeholder="示例：主角服装、道具和方位保持一致，时间线连续推进。"
                   />
                 </label>
               </div>
@@ -146,7 +149,7 @@ export function WorkflowHubModal({
                 <textarea
                   value={String(promptTemplate || "")}
                   onChange={(event) => onPromptTemplateChange?.(event.target.value)}
-                  className="min-h-48 w-full border-b border-atelier-fg/20 bg-transparent py-2 text-sm leading-relaxed outline-none transition-colors duration-500 placeholder:font-display placeholder:italic placeholder:text-atelier-subtle focus:border-atelier-accent"
+                  className="workspace-textarea-input min-h-52"
                   placeholder="编辑用于分镜拓展的主模板。"
                 />
               </label>
@@ -154,6 +157,38 @@ export function WorkflowHubModal({
               <div className="workspace-action-row">
                 <button type="button" className="workspace-action-button" onClick={onOpenWorkspaceManager}>
                   项目 / 章节管理
+                </button>
+                <button
+                  type="button"
+                  className="workspace-action-button"
+                  onClick={canvasActions?.onCopyAll}
+                  disabled={!canvasActions?.canOperateResults}
+                >
+                  复制全部结果
+                </button>
+                <button
+                  type="button"
+                  className="workspace-action-button"
+                  onClick={canvasActions?.onExportMarkdown}
+                  disabled={!canvasActions?.canOperateResults}
+                >
+                  导出 Markdown
+                </button>
+                <button
+                  type="button"
+                  className="workspace-action-button"
+                  onClick={canvasActions?.onExportJson}
+                  disabled={!canvasActions?.canOperateResults}
+                >
+                  导出 JSON
+                </button>
+                <button
+                  type="button"
+                  className="workspace-action-button workspace-action-button-danger"
+                  onClick={canvasActions?.onClearResults}
+                  disabled={!canvasActions?.canOperateResults}
+                >
+                  清空结果
                 </button>
               </div>
             </section>

@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick Start</a> · <a href="#demo">Demo</a> · <a href="#roadmap">Roadmap</a>
+  <a href="#quick-start">Quick Start</a> · <a href="#demo">Demo</a> · <a href="#roadmap">Roadmap</a> · <a href="#常见问题排查">Troubleshooting</a>
 </p>
 
 ---
@@ -93,6 +93,30 @@
 - 存储：SQLite（`server/data/storyboard.sqlite`）
 
 核心数据表：`projects` / `chapters` / `shots` / `shot_images` / `shot_videos` / `sequence_videos` / `history_entries`
+
+### 架构图（简化）
+
+```mermaid
+flowchart LR
+  A["Web UI (React + Tailwind)"] --> B["Express API"]
+  B --> C["Task Manager (In-Memory Queue)"]
+  B --> D["Gemini Proxy Layer"]
+  B --> E["SQLite (Project/History/Sequence)"]
+  C --> D
+```
+
+### 功能矩阵
+
+| 能力域 | 当前状态 | 说明 |
+|---|---|---|
+| 分镜拓展（单次） | ✅ | 文本/图片输入，6/8/10 条输出 |
+| 分镜拓展（批量） | ✅ | Batch Workflow + 任务队列 |
+| 单条分镜生图 | ✅ | 失败可重试，结果持久化到章节 |
+| 单条分镜生视频 | ✅ | 失败可重试，结果持久化到章节 |
+| 多分镜串联视频 | ✅ | 支持顺序编排与图像参与策略 |
+| 串联视频历史回放 | ✅ | SQLite 项目/章节级持久化 |
+| Workflow Hub 状态记忆 | ✅ | URL 记忆 queue/hub 筛选状态 |
+| Redis 队列 | ⏳ | 规划中（后续稳定性专题） |
 
 ---
 
@@ -202,6 +226,8 @@ npm run dev
 | GET | `/api/tasks/:taskId` | 查询任务状态 |
 | POST | `/api/tasks/:taskId/cancel` | 取消任务 |
 
+`GET /api/tasks/:taskId` 返回的 `task` 中包含可选增强字段：`stageCode`、`summary`、`retryable`（兼容旧客户端）。
+
 ---
 
 ## Roadmap
@@ -210,6 +236,17 @@ npm run dev
 - 用户体系与团队协作空间
 - 对象存储（图片/视频与 DB 解耦）
 - 更完整的模板库与镜头语法库
+
+---
+
+## 常见问题排查
+
+- **任务一直停在排队中**  
+  打开 `http://localhost:8787/api/health`，确认 `hasApiKey=true` 且后端在线。
+- **生成失败提示鉴权或模型错误**  
+  检查 `.env` 中 `GEMINI_API_KEY`、`GEMINI_*_MODEL` 和 `GEMINI_ENDPOINT` 是否匹配你的服务商。
+- **Cursor/网络代理导致请求失败**  
+  参考 [代理排查文档](docs/cursor-proxy-troubleshooting.md)。
 
 ---
 

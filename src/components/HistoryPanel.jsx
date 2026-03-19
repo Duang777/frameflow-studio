@@ -2,7 +2,7 @@
 
 export function HistoryPanel({ history, onRestore, onRemove, onClear }) {
   return (
-    <section className="module-block mt-8">
+    <section className="module-block mt-0">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="eyebrow-label">History</p>
