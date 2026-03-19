@@ -27,17 +27,22 @@
 
 ### 界面预览
 
-> 请将你提供的两张截图放到：
-> - `docs/screenshots/main-entrance.png`
-> - `docs/screenshots/studio-overview.png`
+Frameflow Studio 采用「主入口页 + 生产工作台」双层结构：先明确创作路径，再进入高频生产与迭代。
 
-#### 主入口页
-
-![Frameflow Main Entrance](docs/screenshots/main-entrance.png)
-
-#### Studio 工作台
-
-![Frameflow Studio Workspace](docs/screenshots/studio-overview.png)
+<table>
+  <tr>
+    <td width="50%">
+      <strong>主入口页</strong><br/>
+      明确价值、流程与进入路径，降低首次使用门槛。<br/><br/>
+      <img alt="Frameflow Main Entrance" src="docs/screenshots/main-entrance.png" />
+    </td>
+    <td width="50%">
+      <strong>Studio 工作台</strong><br/>
+      面向生产：输入、拓展、筛选、出图、成片、队列与历史协同。<br/><br/>
+      <img alt="Frameflow Studio Workspace" src="docs/screenshots/studio-overview.png" />
+    </td>
+  </tr>
+</table>
 
 ### 核心能力
 
